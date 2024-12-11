@@ -3,7 +3,7 @@
 | Feature     | Dependency Injection                                                                                                                  |
 | Submitted   | 2024-12-06                                                                                                                            |
 | Accepted    | No                                                                                                                                    |
-| Issue       | https://youtrack.jetbrains.com/issue/KTOR-6621/Make-Dependency-Injection-Usage-Simple                                                 |
+| Issue       | [KTOR-6621](https://youtrack.jetbrains.com/issue/KTOR-6621/Make-Dependency-Injection-Usage-Simple)                                    |
 | Preceded by | [Dependency Injection (Google Doc)](https://docs.google.com/document/d/1XJE-2AcQ9SH87Y1kK_0oJGCke_r3ewNhLEMCbE12FVc/edit?usp=sharing) |
 
 ### Contents
