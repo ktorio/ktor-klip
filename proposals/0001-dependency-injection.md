@@ -332,8 +332,9 @@ There are a few ways to tackle this with the Ktor DI:
 
 1. **Global configuration:** we can include some configuration property or attribute that modifies the behavior of 
    `resolve()` to always try constructing an instance when it is not directly declared.
-2. **Declaration-side:** the lambda argument of the `provide` function could be optional, so that simply calling
-   `provide<MyObject>()` will call the constructor of this type with some transitive inference.
+2. **Declaration-side:** as an overload of the zero-argument lambda, we can also account for passing constructors, so
+   calling `provide<Repository<User>>(::UserRepository)` will invoke the constructor with the default resolution on all 
+   arguments.
 3. **Resolution-side:** instead of calling the normal `resolve()` function, we could introduce a `construct()` function
    for explicitly creating a type.
 
@@ -347,7 +348,9 @@ might be to attempt the constructor with the fewest arguments.  Some further res
 
 Normally, validation occurs when calling `resolve()` in the application.  This will make an attempt to find the instance
 of the expected type in the instance repository.  If nothing was declared for this type, then it will throw an exception
-`DependencyMissingException`, unless otherwise implemented by a custom provider.
+`DependencyMissingException`, unless otherwise implemented by a custom provider.  During declaration, there is also a 
+risk of running into a deadlock from a circular reference, which warrants its own validation with a sub-type of the 
+missing dependency exception.
 
 Runtime dependency resolution allows for added flexibility; however, it can lead to some frustration when the 
 application fails due to missing dependencies.  For this, some DI frameworks have introduced compile-time checking to 
