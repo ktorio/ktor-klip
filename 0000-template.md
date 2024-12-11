@@ -16,7 +16,7 @@
 5. [Design Details](#design-details)
 6. [Drawbacks](#drawbacks)
 7. [Advantages](#advantages)
-8. [Unresolved Questions](#unresolved-questions)
+8. [Open Questions](#open-questions)
 9. [Future Directions](#future-directions)
 
 <hr />
@@ -68,8 +68,8 @@ Discuss potential reasons against implementing this proposal. Note consideration
 
 Detail why this design is optimal. Consider the impact of not proceeding with this proposal.
 
-# Unresolved Questions
-[unresolved-questions]: #unresolved-questions
+# Open Questions
+[open-questions]: #open-questions
 
 Outline any aspects that need resolution during the RFC review or implementation. Mention related topics that are out of scope but could be addressed later.
 
