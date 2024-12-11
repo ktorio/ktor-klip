@@ -41,7 +41,7 @@
 [summary]: #summary
 
 We describe a general solution for handling [dependency injection (DI)](https://en.wikipedia.org/wiki/Dependency_injection)
-in Ktor server applications.  Our intent is to provide a simple, performant interface, while avoiding the drawbacks that
+in Ktor server applications.  Our intent is to provide a simple, performant interface, while avoiding the drawbacks
 that can arise when working with the automatic configuration of dependencies.
 
 # Motivation
