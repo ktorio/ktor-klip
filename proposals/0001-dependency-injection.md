@@ -26,6 +26,9 @@
    2. [Validation](#validation)
       1. [Compile-time Validation](#compile-time-validation)
    3. [Dependency lifecycles](#dependency-lifecycles)
+      1. [Request-scoped dependencies](#request-scoped-dependencies)
+      2. [Development mode](#development-mode)
+      3. [Hooks](#hooks)
    4. [Performance](#performance)
    5. [Resolving from Configuration](#resolving-from-configuration)
    6. [Extensibility](#extensibility)
@@ -383,6 +386,24 @@ once and kept for the lifetime of the application (i.e., singleton instances).  
 simply provide a lambda for the instance, then invoke it at the site where it is required.  We won't provide any cleanup
 API for instances, so if there is some need for cleanup, then it may go into a regular application shutdown hook.
 
+### Request-scoped dependencies
+[request-scoped-dependences]: #request-scoped-dependencies
+
+Some frameworks also include the ability to create request-scoped dependencies, like the Ktor plugin for Koin.  We'll 
+defer investigating this as an option until later iterations of the API.
+
+### Development mode
+[development-mode]: #development-mode
+
+We will need to ensure that dependencies are resolved correctly after development-mode "hot" refreshes of the server.
+
+### Hooks
+[hooks]: #hooks
+
+Most phases in the Ktor application lifecycle include some means of registering hooks, like startup or shutdown.  Until 
+we hear a compelling use-case for invoking some code when dependencies are declared or resolved, we'll avoid introducing 
+this functionality.
+
 ## Performance
 [performance]: #performance
 
@@ -440,7 +461,7 @@ could do something like this:
 fun Application.configure() {
     attributes.put(DependencyInjectionServiceKey, object: DependencyInjectionService {
        fun providerContext(): DependencyProviderContext =
-           throw IllegalStateException("")
+           error("We use Koin in this project for declarations")
        
        fun resolutionContext() = DependencyResolutionContext { key ->
            val (type, qualifier) = key.asKoinKey()
@@ -516,6 +537,7 @@ They include:
  - Compile-time checking
  - Client-side injection
  - Instantiation by reflection
+ - Request-scoped instances
 
 Some further design will need to be done to introduce these.
 
