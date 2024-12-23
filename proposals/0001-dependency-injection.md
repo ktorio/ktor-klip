@@ -5,6 +5,7 @@
 | Accepted    | No                                                                                                                                    |
 | Issue       | [KTOR-6621](https://youtrack.jetbrains.com/issue/KTOR-6621/Make-Dependency-Injection-Usage-Simple)                                    |
 | Preceded by | [Dependency Injection (Google Doc)](https://docs.google.com/document/d/1XJE-2AcQ9SH87Y1kK_0oJGCke_r3ewNhLEMCbE12FVc/edit?usp=sharing) |
+| Prototype   | [ktor-chat/dependency-injection](https://github.com/bjhham/ktor-chat/compare/main...dependency-injection)                             |
 
 ### Contents
 
@@ -22,7 +23,8 @@
    3. [Resolution](#resolution)
       1. [Naming](#naming-1)
 6. [Technical Details](#technical-details)
-   1. [Instantiation by Reflection](#instantiation-by-reflection)
+   1. [Automatic injection](#automatic-injection)
+      1. [Configuration](#configuration)
    2. [Validation](#validation)
       1. [Compile-time Validation](#compile-time-validation)
    3. [Dependency lifecycles](#dependency-lifecycles)
@@ -173,7 +175,6 @@ integrated dependency injection system.
 3. It should avoid any reliance on annotations or meta-programming, staying consistent with Ktor's "no magic" philosophy.
 4. It should permit compile-time validation of dependencies to avoid runtime errors from missing dependencies.
 
-
 # Design Details
 [design-details]: #design-details
 
@@ -182,43 +183,59 @@ We'll break down the API by the different phases of its usage:
 1. **Declaration:** how the instantiation of different types is registered
 2. **Resolution:** how we can access the different types from the running application
 
+When developing a Ktor application, you can expect it to look something like this:
+
+```kotlin
+fun main() {
+   embeddedServer(Netty, port = 8080, host = "0.0.0.0", module = Application::module)
+      .start(wait = true)
+}
+
+fun Application.module() {
+   declareDependencies()    // See "Declaration" section 
+   configureApplication()   // See "Resolution" section
+}
+```
+
+In this example, both modules are called from the main `module()`, but they can be treated as interchangeable units 
+using configuration.
+
+For example, when using YAML configuration: 
+
+```yaml
+# application.yaml / ktor / application 
+modules:
+   - io.ktor.example.ImplementationKt.declareDependencies
+   - io.ktor.example.ApplicationKt.configureApplication
+```
+
+This way, we can introduce a dependency inversion where the `declareDependencies` module can live on a different runtime
+classpath than the application module `configureApplication`, which has no knowledge of the implementation details.
+
+In the next two sections, we'll provide the API design for both declaring and resolving dependencies.
+
 ## Declaration
 [declaration]: #declaration
 
 As with declaring extensions in a Ktor application, users can expect to declare their dependencies from the
 same scope: `Application`.
 
-Here is an example module that provides some dependencies:
+Here is how to declare dependencies from an application module:
 
 ```kotlin
-fun Application.configure() {
+fun Application.declareDependencies() {
     dependencies {
+        // Base case
         provide<DataSource> { PostgresDataSource("jdbc:postgresql://localhost:5440/test") }
-        provide<Repository<User>> { UserRepository(resolve()) }
+        // With named instance, using resolve() from the provider context
+        provide<DataSource>("mongo") { MongoDataSource(resolve()) }
+        // Using constructor injection
+        provide<Repository<Message>>(MessageRepository::class)
+        // Alternatively, without the optional interface, and using the context 
+        provide {
+            create(::RoomRepository)
+        }
     }
-}
-```
-
-Where the function calls here look like:
-
-```kotlin
-fun Application.dependencies(block: DependencyProviderContext.() -> Unit) { TODO() }
-
-inline fun <reified T> DependencyProviderContext.provide(key: String? = null, noinline provide: suspend AsyncDependencyResolutionContext.() -> T): Unit =
-    set(DependencyKey.of(typeInfo<T>(), key), provide)
-
-suspend inline fun <reified T> AsyncDependencyResolutionContext.resolve(key: String? = null): T =
-    get(DependencyKey.of(typeInfo<T>(), key))
-```
-
-And the context interfaces look like:
-
-```kotlin
-fun interface DependencyProviderContext {
-    fun <T> set(key: DependencyKey, value: suspend AsyncDependencyResolutionContext.() -> T)
-}
-fun interface AsyncDependencyResolutionContext {
-    suspend fun <T: Any> get(key: DependencyKey): T
 }
 ```
 
@@ -242,35 +259,40 @@ For the *provide* function:
 | declare     | too abstract and non-operative                         |
 | single      | awkward wording out of context                         |
 
+For the *create* function:
+
+| Alternative | Reason for avoiding                                          |
+|-------------|--------------------------------------------------------------|
+| construct   | too specific; this call should allow non-constructor lambdas |
+| inject      | not the most important detail of the function                |
+
 
 ## Resolution
 [resolution]: #resolution
 
 In practice, we can expect the declaring modules to be few, and the resolving modules to be many.
 
-Here is an example of how to resolve a dependency from the `Application` scope:
+Here are the examples of how to resolve dependencies from a Ktor module:
 
 ```kotlin
-fun Application.configure() {
-    val repository by resolve<Repository<User>>()
-}
-```
-
-And the function declarations would look like:
-
-```kotlin
-inline fun <reified T> Application.resolve(key: String? = null): Lazy<T> =
-    attributes[AttributeKey<DependencyInjectionService>("DI")].resolutionContext().resolve(key)
-
-inline fun <reified T> DependencyResolutionContext.resolve(key: String? = null): Lazy<T> =
-    get(DependencyKey.of(typeInfo<T>(), key))
-```
-
-Which is using a context interface that looks like:
-
-```kotlin
-fun interface DependencyResolutionContext {
-    fun <T: Any> get(key: DependencyKey): Lazy<T>
+fun Application.configureApplication() {
+    // Resolve by property delegation
+    val users: Repository<User> by dependencies
+    // Using a named instance
+    val mongo: DataSource by dependencies.named("mongo")
+    // Resolve from the dependencies property in the Application scope
+    val messages: Repository<Message> = dependencies.resolve()
+   
+    // Using the instances in the application code
+    routing {
+        get("/users") {
+            call.respond(users.list())
+        }
+        get("/messages") {
+           call.respond(messages.list())
+        }
+        // ...
+    }
 }
 ```
 
@@ -320,31 +342,41 @@ modules:
 The same can be done using programmatic configuration, although this would be less flexible for managing modules at 
 runtime in different environments.
 
-## Instantiation by reflection
-[instantiation-by-reflection]: #instantiation-by-reflection
+## Automatic injection
+[automatic-injection]: #automatic-injection
 
-Most dependency injection systems include some means for instantiating simple types by supplying resolving dependencies 
-transitively through the reflection over the constructors.  There can be more than one constructor on the type, in which
-case annotations are generally used for marking the correct one to use.  Alternatively, the framework could pick the 
-first constructor that it can successfully resolve.  This can cause some confusion with traceability.
+For declaring and resolving classes, our implementation will need to include some means for injecting parameters for 
+automatic construction.  This introduces some direction in the code that can hinder traceability.  For this reason, 
+we will avoid implicit construction on calls to `resolve()` and instead introduce an explicit API.
 
-For the initial prototype of dependency injection in Ktor, we can forgo this automatic instantiation, but it would be 
-useful to discuss the approach here for future reference.
+As mentioned in the design overview, when providing types through automatic instantiation, the function changes from
+`resolve()` to `create()`.  This suggests that, rather than searching for the instance, we'll create it from its 
+parameters.  Anywhere resolution takes place, the create function can be called.
 
-There are a few ways to tackle this with the Ktor DI:
+The desired extent of automation in a dependency injection framework is a matter of personal preference.  For that 
+reason, we will include means for configuring the default behaviors.
 
-1. **Global configuration:** we can include some configuration property or attribute that modifies the behavior of 
-   `resolve()` to always try constructing an instance when it is not directly declared.
-2. **Declaration-side:** as an overload of the zero-argument lambda, we can also account for passing constructors, so
-   calling `provide<Repository<User>>(::UserRepository)` will invoke the constructor with the default resolution on all 
-   arguments.
-3. **Resolution-side:** instead of calling the normal `resolve()` function, we could introduce a `construct()` function
-   for explicitly creating a type.
+### Configuration
+[configuration]: #configuration
 
-We could implement one or more of these solutions for automatic construction.  For tooling on selecting the right 
-constructor, we can include some logging when the framework decides automatically, indicating that an explicit 
-declaration is required for overriding the behavior.  As for the choice process in the framework itself, one option
-might be to attempt the constructor with the fewest arguments.  Some further research on the topic will be necessary.
+#### Create behavior
+
+1. **Parameter interpretation:** by default, a function parameter will be interpreted as a nameless key from its declared 
+   type.  For named instances, we'll provide a standard `@Named` annotation.  For overriding this behavior, a new 
+   function `(KParameter) -> DependencyKey` can be provided in the configuration.
+2. **Parameter resolution:** by default, calling `create()` for a type will attempt to do the same for its parameters
+   that are not already declared.  This transitive instantiation will be possible to be overridden through another
+   function `(KParameter) -> ResolutionStrategy` where resolution strategy can be either `CREATE` or `RESOLVE`.
+3. **Constructor selection:** we'll provide another standard annotation for marking the injection constructor 
+   `@Inject` when there are multiple to choose from.  In the absense of a marker annotation, the platform will
+   default to naively choosing the first viable constructor.  This can be overridden with another function 
+   with the signature `(KClass<T>) -> Collection<KFunction<T>>`.
+
+#### Resolve behavior
+
+The standard behavior for `resolve()` will be to check the instance repository for the provided key and fail if nothing 
+is found.  For some projects, developers may want to override this behavior by creating new instances, or searching 
+some other source, instead.
 
 ## Validation
 [validation]: #validation
@@ -427,57 +459,48 @@ fun Application.configure() {
 }
 ```
 
-An upcoming feature includes resolving more complex types from properties, which could benefit from the use of this flow 
-greatly.
+An upcoming feature includes resolving more complex types from properties, which could benefit from the use of this 
+flow.
 
 ## Extensibility
 [extensibility]: #extensibility
 
-Users will be able to override the default implementation or extend it with some cascading layers of resolution.
+Users will be able to override the default implementation or extend it using various configuration extension points.
 
-To do this, they can assign an attribute on the `Application` before declaring dependencies:
+To override the entire implementation:
 
 ```kotlin
-fun Application.configure() {
-   attributes.put(DependencyInjectionServiceKey, MyDependencyInjectionService)
+fun Application.configureDependencies() {
+   attributes.put(DependencyRegistryKey, MyDependencyRegistry)
 }
 ```
 
-Where the key would set a service with the interface:
+Or for simpler use cases, different aspects can be overridden with the help of delegation:
 
 ```kotlin
-interface DependencyInjectionService {
-    fun providerContext(): DependencyProviderContext
-    fun resolutionContext(): DependencyResolutionContext
-}
-```
-
-This way, the `provide()` and `resolve()` functions can be overridden as needed.
-
-For example, if a user prefers to keep their Koin declarations while using the new DI system for resolution, they
-could do something like this:
-
-```kotlin
-fun Application.configure() {
-    attributes.put(DependencyInjectionServiceKey, object: DependencyInjectionService {
-       fun providerContext(): DependencyProviderContext =
-           error("We use Koin in this project for declarations")
-       
-       fun resolutionContext() = DependencyResolutionContext { key ->
-           val (type, qualifier) = key.asKoinKey()
-           getKoin().get(type, qualifier)
-       }
-    })
-   
-    koin { 
-        modules(module {
-             single<Repository<User>>(named("users")) { UserRepository() }
-        })
+fun Application.configureDependencies() {
+    install(DI) {
+        // override inspection and creation of types
+        reflection = object: DependencyReflection by default.reflection {
+            // override creation
+            override fun <T: Any> create(kClass: KClass<T>, get: (DependencyKey) -> Any): T = TODO()
+            // override constructor selection
+            override fun <T: Any> constructors(kClass: KClass<T>): Collection<KFunction<T>> = TODO()
+            // override KParameter to dependency key
+            override fun toKey(parameter: KParameter): DependencyKey = TODO()
+        }
+        // override providing dependencies
+        provider = object: DependencyProvider by default {
+            override fun <T> set(key: DependencyKey, value: DependencyResolver.() -> T) = TODO()
+        }
+        // override resolving dependencies 
+        resolver = object: DependencyResolver by default {
+            override fun <T: Any> get(key: DependencyKey): T = TODO()
+        }
     }
-   
-    val repository: Repository<User> = resolve()
 }
 ```
+
 
 ## Testing
 [testing]: #testing
@@ -536,7 +559,6 @@ Some aspects of the implementation were discussed earlier in the document but wi
 They include:
  - Compile-time checking
  - Client-side injection
- - Instantiation by reflection
  - Request-scoped instances
 
 Some further design will need to be done to introduce these.
