@@ -501,6 +501,34 @@ fun Application.configureDependencies() {
 }
 ```
 
+Here is a real-world example of how you can extend dependency resolution with Koin:
+
+```kotlin
+fun Application.rootModule() {
+   install(Koin) {
+      modules(module {
+         single<Algorithm>(named("hash")) {
+            Algorithm.HMAC256(property("security.secret"))
+         }
+      })
+   }
+   install(DI) {
+      resolver = KoinResolver(default, getKoin())
+   }
+}
+
+class KoinResolver(
+   val base: DependencyRegistry,
+   private val koin: Koin,
+) : DependencyResolver by base {
+   override fun <T : Any> get(key: DependencyKey): T =
+      koin.getOrNull(key.type.type, key.name?.let(::StringQualifier))
+         ?: base.get(key)
+}
+```
+
+This allows resolving dependencies that are provided by Koin modules.
+The full example can be found at [ktor-chat/tree/dependency-injection-koin-ext](https://github.com/bjhham/ktor-chat/tree/dependency-injection-koin-ext)
 
 ## Testing
 [testing]: #testing
