@@ -19,9 +19,10 @@
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
    1. [Declaration](#declaration)
-   2. [Naming](#naming)
-   3. [Resolution](#resolution)
-      1. [Naming](#naming-1)
+      1. [Naming](#naming)
+   2. [Resolution](#resolution)
+      1. [By Parameters](#by-parameters) 
+      2. [Naming](#naming-1)
 6. [Technical Details](#technical-details)
    1. [Automatic injection](#automatic-injection)
       1. [Configuration](#configuration)
@@ -51,6 +52,12 @@ that can arise when working with the automatic configuration of dependencies.
 
 # Motivation
 [motivation]: #motivation
+
+Dependency injection (DI) is a technique for populating modules with their required components through an external 
+injection service.  It allows for modules to reference only abstractions, while the injection service handles
+the details of construction at runtime, thereby decoupling said modules from the implementations they depend on.  This 
+decoupling allows for highly adaptive applications, where implementations can be replaced without modifying the 
+existing code.
 
 We receive many support requests from users having difficulty getting started with dependency injection in Ktor,
 especially when coming from a background of using frameworks like Spring Boot.  There are several third party libraries
@@ -275,7 +282,7 @@ In practice, we can expect the declaring modules to be few, and the resolving mo
 Here are the examples of how to resolve dependencies from a Ktor module:
 
 ```kotlin
-fun Application.configureApplication() {
+fun Application.configureRouting() {
     // Resolve by property delegation
     val users: Repository<User> by dependencies
     // Using a named instance
@@ -295,6 +302,30 @@ fun Application.configureApplication() {
     }
 }
 ```
+
+### By Parameters
+[by-parameters]: #by-parameters
+
+Alternatively, we'll provide the option to resolve dependencies using module parameters:
+
+```kotlin
+fun Application.configureRouting(
+   users: Repository<User>,
+   mongo: DataSource,
+   messages: Repository<Message>,
+) {
+   routing {
+      get("/users") {
+         call.respond(users.list())
+      }
+      // ...
+   }
+}
+```
+
+This allows for more natural injection when invoking modules from code, while also providing some 
+compile-time safety.
+
 
 ### Naming
 [naming-1]: #naming-1
@@ -323,7 +354,7 @@ dependency resolution.
 For example, when configuring a server using a YAML file:
 
 ```yaml
-# application.yam / ktor / application 
+# application.yaml / ktor / application 
 modules:
    ## Declare dependencies
    - io.ktor.chat.RootModuleKt.rootModule
