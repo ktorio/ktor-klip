@@ -33,9 +33,10 @@
       2. [Development mode](#development-mode)
       3. [Hooks](#hooks)
    4. [Performance](#performance)
-   5. [Resolving from Configuration](#resolving-from-configuration)
-   6. [Extensibility](#extensibility)
-   7. [Testing](#testing)
+   5. [Collision resolution](#collision-resolution)
+   6. [Resolving from Configuration](#resolving-from-configuration)
+   7. [Extensibility](#extensibility)
+   8. [Testing](#testing)
 7. [Drawbacks](#drawbacks)
 8. [Advantages](#advantages)
 9. [Open Questions](#open-questions)
@@ -236,12 +237,10 @@ fun Application.declareDependencies() {
         provide<DataSource> { PostgresDataSource("jdbc:postgresql://localhost:5440/test") }
         // With named instance, using resolve() from the provider context
         provide<DataSource>("mongo") { MongoDataSource(resolve()) }
-        // Using constructor injection
+        // Using constructor injection from a class reference
         provide<Repository<Message>>(MessageRepository::class)
-        // Alternatively, without the optional interface, and using the context 
-        provide {
-            create(::RoomRepository)
-        }
+        // Using resolution and constructor injection from the provider context
+        provide { RoomRepository(resolve<DataSource>(), create(::RoomAuthorityAdapter)) }
     }
 }
 ```
@@ -399,7 +398,7 @@ reason, we will include means for configuring the default behaviors.
    that are not already declared.  This transitive instantiation will be possible to be overridden through another
    function `(KParameter) -> ResolutionStrategy` where resolution strategy can be either `CREATE` or `RESOLVE`.
 3. **Constructor selection:** we'll provide another standard annotation for marking the injection constructor 
-   `@Inject` when there are multiple to choose from.  In the absense of a marker annotation, the platform will
+   `@Inject` when there are multiple to choose from.  In the absence of a marker annotation, the platform will
    default to naively choosing the first viable constructor.  This can be overridden with another function 
    with the signature `(KClass<T>) -> Collection<KFunction<T>>`.
 
@@ -473,6 +472,16 @@ this functionality.
 The general performance bottlenecks found in DI frameworks are caused from heavy up-front scans, heavy use of 
 reflection, and repeated calls to slow instantiation.  These issues will be avoided in this design by using Kotlin's 
 compile-time type inference (using `typeOf<T>()`), minimal use of reflection, and by only using singletons.
+
+## Collision resolution
+[collision-resolution]: #collision-resolution
+
+Providing dependencies in a declarative way can lead to problems when the same type is declared multiple times.  For
+these cases, we'll need to introduce some collision resolution strategies.  The most logical default strategy would be
+to throw an exception when a dependency is declared twice, but for some cases it makes sense to infer some priority
+from the context.  For example, when declaring dependencies for tests, we ought to allow overriding dependencies from
+the test environment, so we may replace small pieces of functionality without over-exposing the test code to the project
+anatomy.
 
 ## Resolving from configuration
 [resolving-from-configuration]: #resolving-from-configuration
