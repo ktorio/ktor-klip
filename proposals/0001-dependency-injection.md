@@ -2,10 +2,10 @@
 |-------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | Feature     | Dependency Injection                                                                                                                  |
 | Submitted   | 2024-12-06                                                                                                                            |
-| Accepted    | No                                                                                                                                    |
+| Accepted    | Yes                                                                                                                                   |
 | Issue       | [KTOR-6621](https://youtrack.jetbrains.com/issue/KTOR-6621/Make-Dependency-Injection-Usage-Simple)                                    |
 | Preceded by | [Dependency Injection (Google Doc)](https://docs.google.com/document/d/1XJE-2AcQ9SH87Y1kK_0oJGCke_r3ewNhLEMCbE12FVc/edit?usp=sharing) |
-| Prototype   | [ktor-chat/dependency-injection](https://github.com/bjhham/ktor-chat/compare/main...dependency-injection)                             |
+| Prototype   | [ktor-chat/dependency-injection](https://github.com/ktorio/ktor-chat/compare/main...dependency-injection)                             |
 
 ### Contents
 
@@ -282,11 +282,11 @@ Here are the examples of how to resolve dependencies from a Ktor module:
 
 ```kotlin
 fun Application.configureRouting() {
-    // Resolve by property delegation
+    // Resolve by property delegation, this uses Lazy delegation
     val users: Repository<User> by dependencies
     // Using a named instance
     val mongo: DataSource by dependencies.named("mongo")
-    // Resolve from the dependencies property in the Application scope
+    // Resolve from the dependencies property in the Application scope, this triggers the evaluation
     val messages: Repository<Message> = dependencies.resolve()
    
     // Using the instances in the application code
@@ -408,13 +408,18 @@ The standard behavior for `resolve()` will be to check the instance repository f
 is found.  For some projects, developers may want to override this behavior by creating new instances, or searching 
 some other source, instead.
 
+#### Optionals and defaults
+
+When resolving an optional or defaulted property, the standard behavior will be to use the default value when nothing 
+is found, instead of throwing an exception. This behavior ought to be configurable in the plugin with a custom function.
+
 ## Validation
 [validation]: #validation
 
 Normally, validation occurs when calling `resolve()` in the application.  This will make an attempt to find the instance
 of the expected type in the instance repository.  If nothing was declared for this type, then it will throw an exception
 `DependencyMissingException`, unless otherwise implemented by a custom provider.  During declaration, there is also a 
-risk of running into a deadlock from a circular reference, which warrants its own validation with a sub-type of the 
+risk of running into a deadlock from a circular reference, which warrants its own validation with a subtype of the 
 missing dependency exception.
 
 Runtime dependency resolution allows for added flexibility; however, it can lead to some frustration when the 
@@ -568,7 +573,7 @@ class KoinResolver(
 ```
 
 This allows resolving dependencies that are provided by Koin modules.
-The full example can be found at [ktor-chat/tree/dependency-injection-koin-ext](https://github.com/bjhham/ktor-chat/tree/dependency-injection-koin-ext)
+The full example can be found at [ktor-chat/tree/dependency-injection-koin-ext](https://github.com/ktorio/ktor-chat/tree/dependency-injection-koin-ext)
 
 ## Testing
 [testing]: #testing
