@@ -23,26 +23,29 @@
 
 This proposal introduces a Service Discovery plugin for Ktor that enables applications to dynamically 
 locate and communicate with services in distributed environments. The plugin provides a unified abstraction layer 
-over popular discovery mechanisms (Consul, Kubernetes, Eureka, Zookeeper) while offering both client-side 
+over popular discovery mechanisms ([Consul](https://developer.hashicorp.com/consul), 
+[Kubernetes](https://kubernetes.io/), [Eureka](https://github.com/Netflix/eureka/wiki), 
+[Zookeeper](https://zookeeper.apache.org/)) while offering both client-side 
 and server-side discovery patterns. This allows Ktor applications to automatically register themselves with 
 service registries and discover other services without hardcoded configurations, making them more resilient 
 and adaptable to dynamic infrastructure changes.
 
 # Motivation
-[motivation]: #motivation
+[motivation]: #motivationД
 
-Microservices typically run in distributed environments like containers (Docker) or orchestrators (Kubernetes), 
-where services are constantly scaling up and down based on demand. Service discovery is a component in 
-modern distributed systems, enabling services to dynamically locate and communicate with each other 
+Microservices typically run in distributed environments like containers ([Docker](https://www.docker.com/)) 
+or orchestrators ([Kubernetes](https://kubernetes.io/)), where services are constantly scaling up and down based on demand. 
+
+**Service discovery** is a component in modern distributed systems, enabling services to dynamically locate and communicate with each other 
 without hardcoded configurations. The number of instances of a service and its locations change dynamically. 
 We need to know where these instances are and their names to allow requests to arrive at the target microservice. 
 The Service Discovery mechanism helps us know where each instance is located.
 The following are reasons why service discovery is important:
-1. **Dynamic Environments:** Services may be added, removed, or relocated dynamically, and maintaining a static list of IP addresses is impractical.
-2. **Scaling:** Services may scale horizontally. One microservice could have multiple instances, and clients need to know which instance to contact.
-3. **Fault Tolerance:** Services may fail or be restarted, and service discovery ensures that clients are always directed to healthy instances.
-4. **Decoupling Services:** Service discovery helps in decoupling services, as it removes the need to hard-code dependencies between them
-5. **Load Balancing:** Service discovery works hand-in-hand with load balancers to distribute requests evenly across service instances.
+1. **Dynamic Environments:** services may be added, removed, or relocated dynamically, and maintaining a static list of IP addresses is impractical.
+2. **Scaling:** services may scale horizontally. One microservice could have multiple instances, and clients need to know which instance to contact.
+3. **Fault Tolerance:** services may fail or be restarted, and service discovery ensures that clients are always directed to healthy instances.
+4. **Decoupling Services:** service discovery helps in decoupling services, as it removes the need to hard-code dependencies between them
+5. **Load Balancing:** service discovery works hand-in-hand with load balancers to distribute requests evenly across service instances.
 
 
 # Current Solutions
@@ -68,7 +71,7 @@ val response = client.get("$serviceUrl/other")
 [Consul](https://developer.hashicorp.com/consul) is an open-source tool developed by Hashicorp that provides service discovery, health checking, 
 key-value storage, and multi-datacenter support.
 
-#### Workflow:
+#### Workflow
 1. Registration: User adds services to the Consul catalog, which is a central registry that lets services automatically 
 discover each other without requiring a human operator to modify application code, deploy additional load balancers, 
 or hardcode IP addresses. Services can also include health checks so that Consul can monitor for unhealthy services.
@@ -77,7 +80,7 @@ Registered services provide health metrics, access endpoints, and metadata to op
 Services communicate exclusively through their local proxies according to defined identity-based policies.
 
 #### Implementation Process
-1. User need to launch a Consul server
+1. User needs to launch a Consul server
 2. Then define services and associated health checks
 3. Register these definitions with a Consul agent
 4. Enable network services to locate each other via DNS using static or dynamic lookups
@@ -88,55 +91,51 @@ abstracting the underlying communication processes:
 Java client for [Consul HTTP API](http://consul.io), it supports all [API endpoints](http://www.consul.io/docs/agent/http.html), 
 all consistency modes and parameters (tags, datacenters etc.)
 
-
-```kotlin
-val consulClient = ConsulClient("localhost", 8500)
-
-val service = NewService().apply {
-   id = "simple-ktor-service-123"
-   name = "simple-ktor-service"
-   address = "localhost"
-   port = 8080
-   tags = listOf("ktor")
-   check = NewService.Check().apply {
-       http = "http://localhost:8080/health"
-       interval = "15s"
-       timeout = "5s"
+   ```kotlin
+   val consulClient = ConsulClient("localhost", 8500)
+   
+   val service = NewService().apply {
+      id = "simple-ktor-service-123"
+      name = "simple-ktor-service"
+      address = "localhost"
+      port = 8080
+      tags = listOf("ktor")
+      check = NewService.Check().apply {
+          http = "http://localhost:8080/health"
+          interval = "15s"
+          timeout = "5s"
+      }
    }
-}
-
-// Register the service
-consulClient.agentServiceRegister(service)
-
-// Discover services
-val response = consulClient.getCatalogService(serviceName, CatalogServiceRequest.newBuilder().build())
-```
-
+   
+   // Register the service
+   consulClient.agentServiceRegister(service)
+   
+   // Discover services
+   val response = consulClient.getCatalogService(serviceName, CatalogServiceRequest.newBuilder().build())
+   ```
 2. [consul-client](https://github.com/rickfast/consul-client/tree/master) \
    Java Client for Consul HTTP API
 
-
-```kotlin
-val client = Consul.builder().build()
-val agentClient = client.agentClient()
-
-val serviceId = "1"
-val service = ImmutableRegistration.builder()
-    .id(serviceId)
-    .name("myService")
-    .port(8080)
-    .check(Registration.RegCheck.ttl(3L))
-    .tags(Collections.singletonList("tag1"))
-    .meta(Collections.singletonMap("version", "1.0"))
-    .build()
-
-agentClient.register(service)
-agentClient.pass(serviceId)
-
-val healthClient = client.healthClient()
-val nodes = healthClient.getHealthyServiceInstances("myService").getResponse()
-
-```
+   ```kotlin
+   val client = Consul.builder().build()
+   val agentClient = client.agentClient()
+   
+   val serviceId = "1"
+   val service = ImmutableRegistration.builder()
+       .id(serviceId)
+       .name("myService")
+       .port(8080)
+       .check(Registration.RegCheck.ttl(3L))
+       .tags(Collections.singletonList("tag1"))
+       .meta(Collections.singletonMap("version", "1.0"))
+       .build()
+   
+   agentClient.register(service)
+   agentClient.pass(serviceId)
+   
+   val healthClient = client.healthClient()
+   val nodes = healthClient.getHealthyServiceInstances("myService").getResponse()
+   ```
 
 ### 2.2. ZooKeeper
 [Apache ZooKeeper](https://zookeeper.apache.org/) is a centralized service for maintaining configuration information, 
@@ -164,34 +163,35 @@ across all service instances, enabling runtime configuration changes without ser
 [ZooKeeper Client Libraries](https://cwiki.apache.org/confluence/display/ZOOKEEPER/ZKClientBindings):
 1. [Apache Curator](https://curator.apache.org/) \
    Apache Curator is a Java/JVM client library for Apache ZooKeeper, a distributed coordination service. 
-   It includes a high level API framework and utilities to make using Apache ZooKeeper much easier and more reliable.
-```kotlin
-val client = CuratorFrameworkFactory.newClient("localhost:2181")
-client.start()
-
-val serviceDiscovery = ServiceDiscoveryBuilder.builder(ServiceDetails::class.java)
-   .client(client)
-   .basePath("/services")
-   .serializer(JsonInstanceSerializer(ServiceDetails::class.java))
-   .build()
-serviceDiscovery.start()
-
-val serviceInstance = ServiceInstance.builder<ServiceDetails>()
-   .name("simple-ktor-service")
-   .id("simple-ktor-service-123")
-   .address("localhost")
-   .port(8080)
-   .payload(ServiceDetails("ktor"))
-   .build()
-serviceDiscovery.registerService(serviceInstance)
-
-val provider = serviceDiscovery.serviceProviderBuilder()
-   .serviceName("simple-ktor-service")
-   .build()
-provider.start()
-
-val instances = provider.allInstances
-```
+   It includes a high-level API framework and utilities to make using Apache ZooKeeper much easier and more reliable.
+   ```kotlin
+   val client = CuratorFrameworkFactory.newClient("localhost:2181")
+   client.start()
+   
+   val serviceDiscovery = ServiceDiscoveryBuilder.builder(ServiceDetails::class.java)
+      .client(client)
+      .basePath("/services")
+      .serializer(JsonInstanceSerializer(ServiceDetails::class.java))
+      .build()
+   serviceDiscovery.start()
+   
+   val serviceInstance = ServiceInstance.builder<ServiceDetails>()
+      .name("simple-ktor-service")
+      .id("simple-ktor-service-123")
+      .address("localhost")
+      .port(8080)
+      .payload(ServiceDetails("ktor"))
+      .build()
+   serviceDiscovery.registerService(serviceInstance)
+   
+   val provider = serviceDiscovery.serviceProviderBuilder()
+      .serviceName("simple-ktor-service")
+      .build()
+   provider.start()
+   
+   val instances = provider.allInstances
+   ```
+   
 ### 2.3. Kubernetes
 [Kubernetes](https://kubernetes.io/) is an open-source container orchestration platform that provides 
 built-in service discovery as part of its core functionality. It enables automatic detection of services 
@@ -217,79 +217,79 @@ Unhealthy pods are automatically removed from service endpoints until they recov
 
 [Kubernetes Client Libraries](https://kubernetes.io/docs/reference/using-api/client-libraries/) enable programmatic interaction with the Kubernetes API:
 1. [Fabric8 Kubernetes Client](https://github.com/fabric8io/kubernetes-client) \
-   A Java client library for Kubernetes and OpenShift that simplifies integration with Kubernetes APIs.
+   Java client library for Kubernetes and OpenShift that simplifies integration with Kubernetes APIs.
 
-```kotlin
-val client = KubernetesClientBuilder().build()
-
-// Create a deployment
-val deployment = client.apps().deployments().inNamespace("default").createOrReplace(
-    Deployment().apply {
-        metadata = ObjectMeta().apply {
-            name = "simple-ktor-service"
-            namespace = "default"
-        }
-        spec = DeploymentSpec().apply {
-            replicas = 1
-            selector = LabelSelector().apply {
-                matchLabels = mapOf("app" to "simple-ktor-service")
-            }
-            template = PodTemplateSpec().apply {
-                metadata = ObjectMeta().apply {
-                    labels = mapOf("app" to "simple-ktor-service")
-                }
-                spec = PodSpec().apply {
-                    containers = listOf(
-                        Container().apply {
-                            name = "ktor-container"
-                            image = "my-ktor-app:latest"
-                            ports = listOf(ContainerPort().apply {
-                                containerPort = 8080
-                            })
-                            readinessProbe = Probe().apply {
-                                httpGet = HTTPGetAction().apply {
-                                    path = "/health"
-                                    port = IntOrString(8080)
-                                }
-                                initialDelaySeconds = 10
-                                periodSeconds = 15
-                            }
-                        }
-                    )
-                }
-            }
-        }
-    }
-)
-
-// Create a service
-val service = client.services().inNamespace("default").createOrReplace(
-    Service().apply {
-        metadata = ObjectMeta().apply {
-            name = "simple-ktor-service"
-            namespace = "default"
-        }
-        spec = ServiceSpec().apply {
-            selector = mapOf("app" to "simple-ktor-service")
-            ports = listOf(ServicePort().apply {
-                port = 80
-                targetPort = IntOrString(8080)
-            })
-            type = "ClusterIP"
-        }
-    }
-)
-
-// Service discovery is handled automatically by Kubernetes
-// Other services can access this service at: simple-ktor-service.default.svc.cluster.local
-```
+   ```kotlin
+   val client = KubernetesClientBuilder().build()
+   
+   // Create a deployment
+   val deployment = client.apps().deployments().inNamespace("default").createOrReplace(
+       Deployment().apply {
+           metadata = ObjectMeta().apply {
+               name = "simple-ktor-service"
+               namespace = "default"
+           }
+           spec = DeploymentSpec().apply {
+               replicas = 1
+               selector = LabelSelector().apply {
+                   matchLabels = mapOf("app" to "simple-ktor-service")
+               }
+               template = PodTemplateSpec().apply {
+                   metadata = ObjectMeta().apply {
+                       labels = mapOf("app" to "simple-ktor-service")
+                   }
+                   spec = PodSpec().apply {
+                       containers = listOf(
+                           Container().apply {
+                               name = "ktor-container"
+                               image = "my-ktor-app:latest"
+                               ports = listOf(ContainerPort().apply {
+                                   containerPort = 8080
+                               })
+                               readinessProbe = Probe().apply {
+                                   httpGet = HTTPGetAction().apply {
+                                       path = "/health"
+                                       port = IntOrString(8080)
+                                   }
+                                   initialDelaySeconds = 10
+                                   periodSeconds = 15
+                               }
+                           }
+                       )
+                   }
+               }
+           }
+       }
+   )
+   
+   // Create a service
+   val service = client.services().inNamespace("default").createOrReplace(
+       Service().apply {
+           metadata = ObjectMeta().apply {
+               name = "simple-ktor-service"
+               namespace = "default"
+           }
+           spec = ServiceSpec().apply {
+               selector = mapOf("app" to "simple-ktor-service")
+               ports = listOf(ServicePort().apply {
+                   port = 80
+                   targetPort = IntOrString(8080)
+               })
+               type = "ClusterIP"
+           }
+       }
+   )
+   
+   // Service discovery is handled automatically by Kubernetes
+   // Other services can access this service at: simple-ktor-service.default.svc.cluster.local
+   ```
 2. [Kubernetes Java Client](https://github.com/kubernetes-client/java/)
 This client library is officially maintained by Kubernetes SIG API Machinery: 
 [code examples](https://github.com/kubernetes-client/java/wiki/3.-Code-Examples)
 
 ### 2.4. Eureka
 [Netflix Eureka](https://github.com/Netflix/eureka) is a RESTful (Representational State Transfer) service 
-that is primarily used in the AWS cloud for the purpose of discovery, load balancing and failover of middle-tier servers.
+that is primarily used in the AWS cloud for the purpose of discovery, load balancing, and failover of middle-tier servers.
 
 #### Workflow:
 1. Registration: Service instances register themselves with the Eureka server providing metadata such as host, port, 
@@ -415,10 +415,7 @@ fun getServiceInstances() {
 # Design Overview
 [design-overview]: #design-overview
 
-Drawing from our review of other solutions, we have compiled the following design goals and requirements for the
-integrated dependency injection system.
-
-### Core Requirements
+## Core Requirements
 
 - Provide an intuitive, straightforward interface for service registration and discovery
 - Support multiple service registry providers without complex configuration 
@@ -433,18 +430,18 @@ integrated dependency injection system.
 # Design Details
 [design-details]: #design-details
 
-Basically we want to have next features:
-1. Registration: Services announce their existence and network location (IP address, port)
-2. Discovery: Services find other services they need to communicate with
-3. Health monitoring: Tracking which services are available and functioning correctly
+Basically, we want to have the next features:
+1. Registration: services announce their existence and network location (IP address, port)
+2. Discovery: services find other services they need to communicate with
+3. Health monitoring: tracking which services are available and functioning correctly
 
 Without built-in support, developers would need to implement complex service discovery logic themselves. 
 By providing this capability, frameworks abstract away the complexity of network communication, 
 letting developers focus on business logic. We aim to unify the service discovery process so that users 
-only need to provide registry configuration — the rest will be handled by the plugin.
+only need to provide registry configuration — the plugin will handle the rest.
 
 For the registration part we want to add an integration with the following registries: Consul, Kubernetes, Eureka, Zookeeper.
-For the discovery part we want to have an ability to discover services and instances, and also we want to 
+For the discovery part we want to be able to discover services and instances, and also we want to 
 resolve service names to actual instances, optionally using DNS-style service names 
 (e.g., _service://STORES/product_, where "STORES" is a service name).
 The plugin should be able to integrate with the `HttpClient` to intercept and rewrite such requests 
@@ -463,21 +460,38 @@ For a client plugin for Service Discovery we want to have:
 3. Simple way to configure the registry. And it should have a common way of setup for different registries
 
 To be able to register services or get information about them, we need to have access to the registry. The idea is to
-configure the registry for example like this:
+configure the registry, for example, like this:
 ```kotlin
-install(ServiceDiscovery) { 
-    kubernetes {
-        namespace = "default"
-        masterUrl = "https://kubernetes.default.svc"
-        apiVersion = "v1"
-    }
-    // OR
-    consul { 
-        host = "localhost"
-        port = 8500
-        aclToken = "default"
-        healthCheckUrl = "http://localhost:8080/health"
-    }
+install(ServiceDiscovery) {
+   consul {
+      connection {
+         host = "localhost"
+         port = 8500
+         aclToken = "default"
+         
+         tls { 
+             keyStorePath = "/path/to/keystore.p12"
+             keyStorePassword = "password"
+             keyStoreInstanceType = KeyStoreInstanceType.PKCS12
+         }
+      }
+
+      registration {
+         serviceName = "sample-service"
+         instanceId = "sample-service-1"
+         port = 8080
+
+         healthCheck {
+            path = "/health"
+            interval = "10s"
+            timeout = "5s"
+         }
+      }
+
+      discovery {
+         queryPassingOnly = true
+      }
+   }
 }
 ```
 The scheme is illustrated on the image below:
@@ -485,61 +499,62 @@ The scheme is illustrated on the image below:
 
 `ServiceRegistry` and `DiscoveryClient` interfaces will declare common methods for all implementations:
 ```kotlin
-interface ServiceRegistry {
-    suspend fun register(registration: ServiceInstance)
-    suspend fun deregister(registration: ServiceInstance)
-    // ...
+interface ServiceRegistry<T : ServiceInstance> {
+   fun add(instance: T): Boolean
+   fun remove(instanceId: String): Boolean
 }
 
-interface DiscoveryClient { 
-    suspend fun getInstances(serviceId: String): List<ServiceInstance>
-    suspend fun getServices(): List<String>
-    // ...
+interface DiscoveryClient<T : ServiceInstance> {
+   suspend fun getInstances(serviceId: String): List<T>
+   suspend fun getServiceIds(): List<String>
 }
 
 interface ServiceInstance {
-    fun getInstanceId(): String
-    fun getServiceId(): String
-    // ...
-}   
+   val instanceId: String         // Unique identifier of the instance
+   val serviceId: String          // Logical name of the service
+   val host: String               // Hostname or IP address
+   val port: Int                  // Network port
+   val metadata: Map<String, String> // Arbitrary key-value attributes
+
+   val url: Url
+      get() = URLBuilder().apply {
+         host = this@ServiceInstance.host
+         port = this@ServiceInstance.port
+      }.build()
+}
 
 ```
 The individual implementations for each Service Discovery solution 
 (e.g., `KubernetesServiceRegistry` and `KubernetesDiscoveryClient`, `ConsulServiceRegistry` and `ConsulDiscoveryClient`, etc.)
 will implement these interfaces and provide the access to functions available to current service registry:
 ```kotlin
-class ConsulDiscoveryClient : DiscoveryClient {
-    // common method
-    override suspend fun getInstances(serviceId: String): List<ServiceInstance> { /**...**/ }
+class ConsulDiscoveryClient : DiscoveryClient<ConsulServiceInstance> {
+   override suspend fun getInstances(serviceId: String): List<ConsulServiceInstance> 
 
-    // specific for Consul method
-    fun getConsulInstances(serviceId: String): List<ConsulServiceInstance> { /**...**/ }
-}
+   override suspend fun getServiceIds(): List<String> 
 ```
 For server part we want to provide access to the `ServiceRegistry` and `DiscoveryClient` in the `Application` class, so
 user can do something like this:
 ```kotlin
-/** provided by plugin
-var Application.serviceRegistry: ServiceRegistry
-var Application.discoveryClient: DiscoveryClient
-**/
 
 application {
-   val consulServiceRegistry = serviceRegistry as ConsulServiceRegistry
-   val consulDiscoveryClient = discoveryClient as ConsulDiscoveryClient
+   val registry = application.getServiceRegistry<ConsulServiceRegistry>()
+   val discovery = application.getDiscoveryClient<ConsulDiscoveryClient>()
    routing {
       get("/register") {
-         consulServiceRegistry.register {
-            //...
+         val success = registry.add {
+            instanceId = "sample-instance"
+            serviceId = "sample-service"
+            host = "localhost"
+            port = 8080
          }
+         call.respondText("Registration successful: $success")
       }
+
       get("/instances") {
          val serviceId = call.parameters["serviceId"] ?: return@get call.respond(HttpStatusCode.BadRequest)
-         // available for all implementations
-         val commonInstances: List<ServiceInstance> = discoveryClient.getInstances(serviceId)
-         // available for Consul implementation
-         val consulInstances: List<ConsulServiceInstance> = consulDiscoveryClient.getConsulInstances(serviceId)
-         call.respond(consulInstances)
+         val instances = discovery.getInstances(serviceId)
+         call.respond(instances)
       }
    }
 }
@@ -550,17 +565,20 @@ For client part we want to be able to resolve service names to actual instances 
 
 val client = HttpClient {
     install(ServiceDiscovery) {
-        consul {
-            host = "localhost"
-            port = 8500
-        }
+       consul {
+          connection {
+             host = "localhost"
+             port = 8500
+          }
+       }
     }
 }
 client.get("service://STORES/product") {
     // The request will be resolved to the actual instance of the service 
 }
 
-client.discoveryClient.getInstances("STORES") // get all instances of the service
+val discovery = client.getDiscoveryClient<ConsulDiscoveryClient>()
+val instances = discovery.getInstances("STORES")
 ```
 
 # Technical Details
@@ -624,3 +642,27 @@ interfaces helps to clarify the responsibilities of each component
    - Circuit breaking (preventing cascading failures)
    - Failover (rerouting to healthy instances)
 3. Retry mechanisms: Attempting connections to alternative instances
+4. Event listener support:
+   Subscribing to real-time updates of healthy services is essential in dynamic microservice environments, 
+   as it enables applications to promptly detect and respond to changes such as a database node going 
+   down
+```kotlin
+sealed class ServiceEvent {
+    data class InstanceAdded(val instance: ServiceInstance) : ServiceEvent()
+    data class InstanceRemoved(val instance: ServiceInstance) : ServiceEvent()
+    data class InstanceUpdated(val instance: ServiceInstance) : ServiceEvent()
+}
+
+interface ServiceEventListener {
+    fun events(serviceId: String): Flow<ServiceEvent>
+}
+
+val eventClient: ServiceEventClient = // obtain implementation
+   eventClient.events("STORES").collect { event ->
+      when (event) {
+         is ServiceEvent.InstanceAdded -> println("Instance added: ${event.instance}")
+         is ServiceEvent.InstanceRemoved -> println("Instance removed: ${event.instance}")
+         is ServiceEvent.InstanceUpdated -> println("Instance updated: ${event.instance}")
+      }
+   }
+```
