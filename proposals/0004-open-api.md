@@ -57,16 +57,44 @@ These are good solutions, but they are not officially supported by Jetbrains and
 # Design Overview
 [design-overview]: #design-overview
 
-Our main challenge for instrumenting Ktor to generate OpenAPI specifications is that we have very little to leverage from our routing implementation to infer the details of the resulting model.  Without any up-front declarations of parameters, response types, or errors, we need to rely on the introduction of new APIs to explicitly declare them.  This can lead to redundancies and inconsistencies.
+Our main challenge for instrumenting Ktor to generate OpenAPI specifications is that we have very little information from our routing implementation to use in the resulting model.  Without any up-front declarations of parameters, response types, or errors, we need to rely on the introduction of new APIs to explicitly declare them.  This can lead to redundancies and inconsistencies. 
+
+We also have multiple relevant sources in a project that can contribute to the model (e.g. routing, authorization, content negotiation, etc.).  Each of these needs to be accounted for if we are to have a specification that represents the server implementation.
+
+As far as the API design is concerned, we must also consider the key strengths of Ktor's routing API, so that we can enhance the API without changing its minimalist character.
+
+To summarize our high-level requirements, the tooling must:
+1. Generate an OpenAPI specification from the application's routes.
+2. Provide mechanisms for injecting new information into the specification.
+3. Prevent inconsistencies and redundancy by maintaining strong cohesion with application code.
+4. Maintain the readability and simplicity of Ktor's routing API by requiring minimal changes.
 
 # Design Details
 [design-details]: #design-details
 
-Provide a detailed description of the proposal. Include examples and explain its impact on users. Address:
-- Usage examples to clarify the feature.
-- How this will benefit users.
-- Potential error messages or warnings if relevant.
-- For technical proposals, focus on what contributors need to know about implementation and impacts.
+To address the requirements above, we propose a multifaceted approach:
+1. An extensible runtime specification generator which can infer details from the application state (i.e., routing, authorization, etc.)
+2. A compile-time code analysis tool for supplying all missing information to the specification generator.
+3. (Second phase) Introduce a new routing API that includes a greater share of the required information to mitigate possible inconsistencies.
+
+Here is how you might expect the API to look in the first phase of our design:
+
+```kotlin
+/**
+ * Get a specific user by ID
+ * 
+ * @tag [Users]
+ * @param id The user identifier
+ * @response 200 [User] found
+ * @response [HttpStatusCode.NotFound] [User] not found
+ */
+get("/{id}") {
+    val id = call.parameters["id"]?.toInt() ?: throw BadRequestException("Invalid ID")
+    call.respond(userService.getUser(id) ?: throw NotFoundException())
+}
+```
+
+As you can see from the example, we intend to inject the missing path information using the KDoc comment syntax.  Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
 
 # Technical Details
 [technical-details]: #technical-details
