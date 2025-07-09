@@ -106,21 +106,25 @@ ktor {
         title = "My Service"
         description = "Does all sorts of cool things"
         version = "1.0.0"
-        // all sources are merged at runtime to create the final specification
-        sources = listOf(
-            // default sources
-            Comments,
-            Routing,
-            Authentication,
-            ContentNegotiation,
-            // custom metadata
-            FileSpec("openapi-spec.yaml")
-        )
+        
+        // configure the gradle task for reading comments
+        analysis {
+            enabled = true
+            // output files, tweaking sources, etc.
+        }
     }
 }
 ```
 
-In the following section, we'll provide details on all sources and how each field is populated to form the final OpenAPI specification.  Additionally, we'll cover the introspection API for processing the endpoint details that will be used for generating the specification.
+As the server is running, it will merge multiple sources:
+ - Files (output from the gradle task, or manually created)
+ - Routing
+ - Authorization plugin
+ - Content negotiation plugin
+
+These will be selected through your application properties file and exposed as a dynamic model which is served from your OpenAPI endpoint.
+
+In the following section, we'll provide details on all of the above sources and how each field is populated to form the final OpenAPI specification.  Additionally, we'll cover the introspection API for processing the endpoint details that will be used for generating the specification.
 
 # Technical Details
 [technical-details]: #technical-details
