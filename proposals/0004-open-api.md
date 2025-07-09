@@ -94,7 +94,33 @@ get("/{id}") {
 }
 ```
 
-As you can see from the example, we intend to inject the missing path information using the KDoc comment syntax.  Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
+As shown in the example, we intend to inject the missing path information using the KDoc comment syntax.  Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
+
+The injection of the KDoc comments into the specification will need to be handled through a gradle task, which may also include some top-level details like the name of the service:
+
+```kotlin
+// in build.gradle.kts
+ktor {
+    openapi {
+        // top-level details may be provided in the gradle task call
+        title = "My Service"
+        description = "Does all sorts of cool things"
+        version = "1.0.0"
+        // all sources are merged at runtime to create the final specification
+        sources = listOf(
+            // default sources
+            Comments,
+            Routing,
+            Authentication,
+            ContentNegotiation,
+            // custom metadata
+            FileSpec("openapi-spec.yaml")
+        )
+    }
+}
+```
+
+In the following section, we'll provide details on all sources and how each field is populated to form the final OpenAPI specification.  Additionally, we'll cover the introspection API for processing the endpoint details that will be used for generating the specification.
 
 # Technical Details
 [technical-details]: #technical-details
