@@ -86,7 +86,7 @@ Here is how you might expect the API to look in the first phase of our design:
  * @tag [Users]
  * @param id The user identifier
  * @response 200 [User] found
- * @response [HttpStatusCode.NotFound] [User] not found
+ * @response 404 [User] not found
  */
 get("/{id}") {
     val id = call.parameters["id"]?.toInt() ?: throw BadRequestException("Invalid ID")
@@ -129,27 +129,152 @@ In the following section, we'll provide details on all of the above sources and 
 # Technical Details
 [technical-details]: #technical-details
 
-Dive into the technical specifics:
-- Clarify interactions with existing features.
-- Outline high-level implementation data.
-- Discuss edge cases with examples if applicable.
+In this section, we'll discuss the details of the implementation.
+
+## Default path introspection from the Routing API
+
+Our routing API builds an internal model which is already accessible from the application state.  It provides a limited set of details that can be used to populate the path information for the OpenAPI endpoints.
+
+Here is an example of the routing API:
+
+```kotlin
+routing {
+    route("/api/v1") {
+        get("/users") {
+            call.respond(userService.getUsers())
+        }
+        get("/users/{id}") {
+            val id = call.parameters["id"]?.toInt() ?: throw BadRequestException("Invalid ID")
+            call.respond(userService.getUser(id) ?: throw NotFoundException())
+        }
+        post("/users") {
+            userService.createUser(call.receive())
+            call.respond(HttpStatusCode.Created)
+        }
+    }
+}
+```
+
+As each route in the example is defined from the DSL, it is added to the application's internal model.  We can use this model to infer details pertaining to each route:
+1. The merged path
+2. The path parameters
+3. The HTTP method
+
+Because the handling of parameters and responses is contained to the route's lambda argument, we cannot infer details about them for the specification.  As a result, the default model will appear very basic without additional sources.
+
+To address this requirement, we indent to supplement the path information with a KDoc-like annotation API that can be read by our Gradle plugin.
+
+## Annotation API
+
+The annotation API provides a non-intrusive way to enhance the OpenAPI specification with details that cannot be inferred from code.
+
+Each endpoint will need to be annotated with a KDoc comment that follows this general format:
+
+```kotlin
+/**
+ * A summary of the endpoint
+ * 
+ * @<key> <value>
+ * ...
+ */
+get("/widgets") {
+    call.respond(widgetService.list())
+}
+```
+
+Here is a list of the parameters to be supported:
+
+| Tag            | Format                              | Description                                                  |
+|----------------|-------------------------------------|--------------------------------------------------------------|
+| `@tag`         | `@tag [TagName]`                    | Associates the endpoint with a tag for grouping              |
+| `@param`       | `@param name description`           | Describes a path or query parameter                          |
+| `@header`      | `@header name description`          | Describes a header parameter                                 |
+| `@cookie`      | `@cookie name description`          | Describes a cookie parameter                                 |
+| `@body`        | `@body [Type] description`          | Documents the request body type                              |
+| `@response`    | `@response code [Type] description` | Documents a response code with optional type and description |
+| `@deprecated`  | `@deprecated reason`                | Marks an endpoint as deprecated                              |
+| `@description` | `@description text`                 | Provides a detailed endpoint description                     |
+| `@security`    | `@security scheme`                  | Documents security requirements                              |
+
+Note that for `@body` and `@response` fields, a type reference is specified, which will be used to automatically supply the schema definition in the OpenAPI specification.
+
+By default, all parameters will be considered required unless the name is suffixed with a question mark (`?`).  For example, `@param name?` indicates that the parameter is optional.
+
+There will be some cases where it will be impossible to relate an endpoint back to the comment, for example when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
+
+## Specification API
+
+To support the generation of the OpenAPI specification, we'll be extending our current OpenAPI plugin with several new functions that hook into the dynamic model generation.
+
+Our current plugin has a single routing function that can be used for serving your specification from a file:
+
+```kotlin
+routing {
+    openAPI(path="openapi", swaggerFile = "openapi/documentation.yaml") {
+        codegen = StaticHtmlCodegen()
+    }
+}
+```
+
+We'll introduce a new function for generating the model dynamically:
+
+```kotlin
+fun Route.openAPI(path: String, modelSource: OpenAPISource = DefaultOpenAPISource, configure: OpenAPIConfig.() -> Unit = {})
+```
+
+Where the `OpenAPISource` argument is a functional interface:
+
+```kotlin
+fun interface OpenAPISource {
+    fun generate(application: Application): OpenAPI
+}
+```
+
+Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.
+
+The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatability, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
+
+## Gradle Plugin
+
+The Gradle plugin component of this feature will be an extension of the current Ktor gradle plugin.  It will govern the task of generating parts of the OpenAPI specification during build time.
+
+Returning to our earlier example, you can see the general appearance of the DSL inside a gradle build script:
+
+```kotlin
+// in build.gradle.kts
+ktor {
+    openapi {
+        // top-level details may be provided in the gradle task call
+        title = "My Service"
+        description = "Does all sorts of cool things"
+        version = "1.0.0"
+        
+        // configure the gradle task for reading comments
+        analysis {
+            enabled = true
+            // output files, tweaking sources, etc.
+        }
+    }
+}
+```
+
+Note that the general properties of the specification are provided through the top-level `openapi` block.  The analysis block is used to configure the Gradle task that will read the comments in your source code.
 
 # Drawbacks
 [drawbacks]: #drawbacks
 
-Discuss potential reasons against implementing this proposal. Note considerations that could demand a new proposal or adjustment.
+The main drawback of using the annotation API is that it does not enforce correspondence between the actual sourcecode and the resulting specification.  You can, for example, change the response type without changing the comment, which will result in a discrepancy.
+
+You could also argue that having multiple sources to compile the specification creates unneeded complexity, which could lead to some difficulty when tracing problems in your specification.
+
+Eventually, we would like to introduce an alternative routing API that includes all information required for building the model during runtime.  This would eliminate the need for the annotation API, and the Gradle plugin, but it would be too disruptive to current users to replace their routing.
 
 # Advantages
 [advantages]: #advantages
 
-Detail why this design is optimal. Consider the impact of not proceeding with this proposal.
-
-# Open Questions
-[open-questions]: #open-questions
-
-Outline any aspects that need resolution during the RFC review or implementation. Mention related topics that are out of scope but could be addressed later.
+The proposed solution addresses the need to provide an unobtrusive way to inject OpenAPI documentation into Ktor's current routing API.  It covers all requirements for serving the specification from the application and should satisfy the general needs for API developers.
 
 # Future Directions
 [future-directions]: #future-directions
 
-Explore potential future directions for your proposal. Consider how it might evolve and interact within the project. Use this section for ideas outside the current RFC's scope but relevant context.
+In this document, we mentioned future plans for developing an alternative routing API that includes all required information.  We have not yet started work on this, but we expect to have a prototype ready in the next few months.
