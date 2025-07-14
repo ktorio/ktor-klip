@@ -13,7 +13,7 @@
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
 6. [Technical Details](#technical-details)
-    1. [Default path introspection from the Routing API](#default-path)
+    1. [Routing API Introspection](#routing-api-introspection)
     2. [Annotation API](#annotation-api)
     3. [Specification API](#specification-api)
     4. [Gradle Plugin](#gradle-plugin)
@@ -138,8 +138,8 @@ In the following section, we'll provide details on all of the above sources and 
 
 In this section, we'll discuss the details of the implementation.
 
-## Default path introspection from the Routing API
-[default-path]: #default-path
+## Routing API Introspection
+[routing-api-introspection]: #routing-api-introspection
 
 Our routing API builds an internal model which is already accessible from the application state.  It provides a limited set of details that can be used to populate the path information for the OpenAPI endpoints.
 
@@ -318,3 +318,5 @@ During the prototyping phase, we should find answers to these questions and adju
 [future-directions]: #future-directions
 
 In this document, we mentioned plans for developing an alternative routing API that includes all required information.  We have not yet started work on this, but we expect to have a proposal ready in the next few months.
+
+For one possible approach to a more feature-rich routing API, you can explore the [Ktor-Typed](https://github.com/nomisRev/ktor-typed) repository.
