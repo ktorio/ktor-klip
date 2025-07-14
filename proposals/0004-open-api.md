@@ -12,10 +12,16 @@
 3. [Current Solutions](#current-solutions)
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
-6. [Drawbacks](#drawbacks)
-7. [Advantages](#advantages)
-8. [Open Questions](#open-questions)
-9. [Future Directions](#future-directions)
+6. [Technical Details](#technical-details)
+    1. [Default path introspection from the Routing API](#default-path)
+    2. [Annotation API](#annotation-api)
+    3. [Specification API](#specification-api)
+    4. [Gradle Plugin](#gradle-plugin)
+    5. [Type-safe routing](#type-safe-routing)
+7. [Drawbacks](#drawbacks)
+8. [Advantages](#advantages)
+9. [Open Questions](#open-questions)
+10. [Future Directions](#future-directions)
 
 <hr />
 
@@ -132,6 +138,7 @@ In the following section, we'll provide details on all of the above sources and 
 In this section, we'll discuss the details of the implementation.
 
 ## Default path introspection from the Routing API
+[default-path]: #default-path
 
 Our routing API builds an internal model which is already accessible from the application state.  It provides a limited set of details that can be used to populate the path information for the OpenAPI endpoints.
 
@@ -165,6 +172,7 @@ Because the handling of parameters and responses is contained to the route's lam
 To address this requirement, we indent to supplement the path information with a KDoc-like annotation API that can be read by our Gradle plugin.
 
 ## Annotation API
+[annotation-api]: #annotation-api
 
 The annotation API provides a non-intrusive way to enhance the OpenAPI specification with details that cannot be inferred from code.
 
@@ -203,6 +211,7 @@ By default, all parameters will be considered required unless the name is suffix
 There will be some cases where it will be impossible to relate an endpoint back to the comment, for example when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
 
 ## Specification API
+[specification-api]: #specification-api
 
 To support the generation of the OpenAPI specification, we'll be extending our current OpenAPI plugin with several new functions that hook into the dynamic model generation.
 
@@ -235,6 +244,7 @@ Now, instead of simply parsing the model from a file, you can provide any implem
 The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatability, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
 
 ## Gradle Plugin
+[gradle-plugin]: #gradle-plugin
 
 The Gradle plugin component of this feature will be an extension of the current Ktor gradle plugin.  It will govern the task of generating parts of the OpenAPI specification during build time.
 
@@ -260,6 +270,11 @@ ktor {
 
 Note that the general properties of the specification are provided through the top-level `openapi` block.  The analysis block is used to configure the Gradle task that will read the comments in your source code.
 
+## Type-safe routing
+[type-safe-routing]: #type-safe-routing
+
+Ktor provides a [type-safe routing API](https://ktor.io/docs/server-resources.html) as an alternative to the standard DSL.  It includes a `@Resource` annotation for mapping the URL path to a class.  The annotation API should be extended so that annotations on the class will be merged with the annotations on the route declaration.
+
 # Drawbacks
 [drawbacks]: #drawbacks
 
@@ -274,7 +289,21 @@ Eventually, we would like to introduce an alternative routing API that includes 
 
 The proposed solution addresses the need to provide an unobtrusive way to inject OpenAPI documentation into Ktor's current routing API.  It covers all requirements for serving the specification from the application and should satisfy the general needs for API developers.
 
+# Open Questions
+[open-questions]: #open-questions
+
+There are some important technical details that will require testing:
+
+1. How robust will the annotation processing be?
+    - For example, when calling the routing API from a custom function, can we trace the path value?
+2. What will be the performance impact?
+    - If there is an impact, we ought to relegate the Gradle task to production builds only. 
+3. How can we update the specification incrementally at runtime?
+    - It would be ideal if changes to the comments could be detected and reflected in the specification while the server is running in development mode.
+
+During the prototyping phase, we should find answers to these questions and adjust the design accordingly.
+
 # Future Directions
 [future-directions]: #future-directions
 
-In this document, we mentioned future plans for developing an alternative routing API that includes all required information.  We have not yet started work on this, but we expect to have a prototype ready in the next few months.
+In this document, we mentioned plans for developing an alternative routing API that includes all required information.  We have not yet started work on this, but we expect to have a proposal ready in the next few months.
