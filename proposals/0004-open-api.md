@@ -18,6 +18,7 @@
     3. [Specification API](#specification-api)
     4. [Gradle Plugin](#gradle-plugin)
     5. [Type-safe routing](#type-safe-routing)
+    6. [Extensibility](#extensibility)
 7. [Drawbacks](#drawbacks)
 8. [Advantages](#advantages)
 9. [Open Questions](#open-questions)
@@ -235,13 +236,23 @@ Where the `OpenAPISource` argument is a functional interface:
 
 ```kotlin
 fun interface OpenAPISource {
-    fun generate(application: Application): OpenAPI
+    fun generate(application: Application): OpenAPIFragment
 }
 ```
 
-Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.
+Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.  We use `OpenAPIFragment` here to represent a partial OpenAPI specification that can be converted for use in the rendered HTML.
 
 The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatability, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
+
+## Extensibility
+[extensibility]: #extensibility
+
+The functionality of the generation ought to be extensible in the following ways:
+
+1. Overriding the comment-parsing in the compiler plugin using a custom function.
+2. Ability to serve different specifications using the OpenAPI sources.
+3. Providing custom sources for the model.
+
 
 ## Gradle Plugin
 [gradle-plugin]: #gradle-plugin
