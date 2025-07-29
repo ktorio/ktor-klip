@@ -1,9 +1,10 @@
-|             |                                                 |
-|-------------|-------------------------------------------------|
-| Feature     | OpenAPI Generation                              |
-| Submitted   | 2024-12-01                                      |
-| Accepted    | No                                              |
-| Issue       | https://youtrack.jetbrains.com/issue/KTOR-8316/ |
+|           |                                                                                                    |
+|-----------|----------------------------------------------------------------------------------------------------|
+| Feature   | OpenAPI Generation                                                                                 |
+| Submitted | 2025-07-21                                                                                         |
+| Accepted  | No                                                                                                 |
+| Issue     | <https://youtrack.jetbrains.com/issue/KTOR-8316/>                                                  |
+| Prototype | <https://github.com/ktorio/ktor-build-plugins/tree/bjhham/openapi-eap/samples/ktor-openapi-sample> |
 
 ### Contents
 
@@ -14,7 +15,7 @@
 5. [Design Details](#design-details)
 6. [Technical Details](#technical-details)
     1. [Routing API Introspection](#routing-api-introspection)
-    2. [Annotation API](#annotation-api)
+    2. [KDocumentation API](#kdocumentation-api)
     3. [Specification API](#specification-api)
     4. [Gradle Plugin](#gradle-plugin)
     5. [Type-safe routing](#type-safe-routing)
@@ -103,22 +104,22 @@ get("/{id}") {
 
 As shown in the example, we intend to inject the missing path information using the KDoc comment syntax.  Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
 
-The injection of the KDoc comments into the specification will need to be handled through a gradle task, which may also include some top-level details like the name of the service:
+The injection of the KDoc comments into the specification will need to be handled through a Gradle task, which may also include some top-level details like the name of the service:
 
 ```kotlin
 // in build.gradle.kts
 ktor {
     openapi {
-        // top-level details may be provided in the gradle task call
+        // options for execution
+        enabled = true
+        strict = true
+        
+        // top-level details may be provided
         title = "My Service"
         description = "Does all sorts of cool things"
         version = "1.0.0"
         
-        // configure the gradle task for reading comments
-        analysis {
-            enabled = true
-            // output files, tweaking sources, etc.
-        }
+        // output files, etc.
     }
 }
 ```
@@ -172,8 +173,8 @@ Because the handling of parameters and responses is contained to the route's lam
 
 To address this requirement, we indent to supplement the path information with a KDoc-like annotation API that can be read by our Gradle plugin.
 
-## Annotation API
-[annotation-api]: #annotation-api
+## KDocumentation API
+[kdocumentation-api]: #kdocumentation-api
 
 The annotation API provides a non-intrusive way to enhance the OpenAPI specification with details that cannot be inferred from code.
 
@@ -184,6 +185,7 @@ Each endpoint will need to be annotated with a KDoc comment that follows this ge
  * A summary of the endpoint
  * 
  * @<key> <value>
+ *     <attribute>: <value>
  * ...
  */
 get("/widgets") {
@@ -191,25 +193,91 @@ get("/widgets") {
 }
 ```
 
-Here is a list of the parameters to be supported:
+### KDoc Fields
 
-| Tag            | Format                              | Description                                                  |
-|----------------|-------------------------------------|--------------------------------------------------------------|
-| `@tag`         | `@tag [TagName]`                    | Associates the endpoint with a tag for grouping              |
-| `@param`       | `@param name description`           | Describes a path or query parameter                          |
-| `@header`      | `@header name description`          | Describes a header parameter                                 |
-| `@cookie`      | `@cookie name description`          | Describes a cookie parameter                                 |
-| `@body`        | `@body [Type] description`          | Documents the request body type                              |
-| `@response`    | `@response code [Type] description` | Documents a response code with optional type and description |
-| `@deprecated`  | `@deprecated reason`                | Marks an endpoint as deprecated                              |
-| `@description` | `@description text`                 | Provides a detailed endpoint description                     |
-| `@security`    | `@security scheme`                  | Documents security requirements                              |
+Here is a list of the fields to be supported:
 
-Note that for `@body` and `@response` fields, a type reference is specified, which will be used to automatically supply the schema definition in the OpenAPI specification.
+| Tag             | Format                                          | Description                                                  |
+|-----------------|-------------------------------------------------|--------------------------------------------------------------|
+| `@tags`         | `@tags *name`                                   | Associates the endpoint with a tag for grouping              |
+| `@path`         | `@path [Type] name description`                 | Describes a path parameter                                   |
+| `@query`        | `@query [Type] name description`                | Describes a query parameter                                  |
+| `@header`       | `@header [Type] name description`               | Describes a header parameter                                 |
+| `@cookie`       | `@cookie [Type] name description`               | Describes a cookie parameter                                 |
+| `@body`         | `@body contentType [Type] description`          | Documents the request body type                              |
+| `@response`     | `@response code contentType [Type] description` | Documents a response code with optional type and description |
+| `@deprecated`   | `@deprecated reason`                            | Marks an endpoint as deprecated                              |
+| `@description`  | `@description text`                             | Provides a detailed endpoint description                     |
+| `@security`     | `@security scheme`                              | Documents security requirements                              |
+| `@externalDocs` | `@external href`                                | External documentation links                                 |
 
-By default, all parameters will be considered required unless the name is suffixed with a question mark (`?`).  For example, `@param name?` indicates that the parameter is optional.
+#### Type references
 
-There will be some cases where it will be impossible to relate an endpoint back to the comment, for example when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
+Note that for some fields, a type reference is specified, which will be used to automatically supply the schema definition in the OpenAPI specification.  This is an optional part of the definition, where in cases when it is unspecified, a default schema of `any` will be used.
+
+Because KDoc links do not support optional modifiers or generics, we can use a custom syntax for indicating arrays, maps, and optionals.
+
+| Modifier | Format           | JSON Schema mapping                                                          |
+|----------|------------------|------------------------------------------------------------------------------|
+| `+`      | `[String]+`      | [Array](https://json-schema.org/understanding-json-schema/reference/array)   |
+| `?`      | `[String]?`      | [Required](https://www.learnjsonschema.com/2020-12/validation/required/)     |
+| `:`      | `[String]:[Any]` | [Object](https://json-schema.org/understanding-json-schema/reference/object) |
+
+#### Attributes
+
+Many of the fields will have fields of their own for building the model.  We'll break these down into the following subsections:
+- Parameter attributes: `@path`, `@query`, `@header`, `@cookie`
+- Response attributes: `@response`
+
+##### Parameter attributes
+
+| Tag          | Format                           | Default                                                                            |
+|--------------|----------------------------------|------------------------------------------------------------------------------------|
+| `required`   | `required: true/false`           | When type is provided, inferred from `?`.  Otherwise, `false` for all but `@path`. |
+| `deprecated` | `deprecated: true/false`         | Describes a path parameter                                                         |
+
+We'll also allow JSON Schema attributes to be included for all parameters.  You'll find these in a [Separate Appendix](appendices/open-api-json-schema-attributes.md).
+
+##### Response attributes
+
+| Tag          | Format                     | Default                                            |
+|--------------|----------------------------|----------------------------------------------------|
+| `headers`    | `headers:\n    key: value` | Empty; headers are provided in YAML object format. |
+
+#### Full Example
+
+Taking all the possible KDoc tags and extra attributes into consideration, here is an example of a complete KDoc comment:
+
+```kotlin
+routing {
+    /**
+     * Get a list of widgets
+     * 
+     * @tags widgets
+     * @path [String] id Widget library ID
+     *   pattern: [a-e0-9]{6,8}
+     * @query [Int]? limit The maximum number of widgets to return
+     *   minimum: 1
+     *   default: 50
+     * @query [String]? sort The sort field
+     *   enum: [name, created]
+     *   default: name
+     * @query [Boolean] archived Whether to include archived widgets
+     * @response 200 [String]:[com.acme.Widget] A list of widgets
+     * @response 404 [com.acme.Widget]+ Not found
+     */
+    get("/widgets/{id}") {
+        call.respond(repository.find(
+            library = call.parameters["id"],
+            limit = call.queryParameters["limit"]?.toIntOrNull() ?: 50,
+            sort = call.queryParameters["sort"] ?: "name",
+            archived = call.queryParameters["archived"]?.toBoolean() ?: false,
+        ))
+    }
+}
+```
+
+There will be some cases where it will be impossible to relate an endpoint back to the comment, for example, when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
 
 ## Specification API
 [specification-api]: #specification-api
@@ -220,29 +288,49 @@ Our current plugin has a single routing function that can be used for serving yo
 
 ```kotlin
 routing {
+    // path and swaggerFile are optional
     openAPI(path="openapi", swaggerFile = "openapi/documentation.yaml") {
+        // OpenAPIConfig.() -> Unit
         codegen = StaticHtmlCodegen()
     }
 }
 ```
 
-We'll introduce a new function for generating the model dynamically:
+The `OpenAPIConfig` class contains the following properties:
+- `parser`: The parser to use for parsing the model.
+- `opts`: Options for the generator.
+- `generator`: The generator for supplying the backing files for the web generator.
+- `codegen`: The code generator for building the web page.
+- `options`: Parser options.
 
-```kotlin
-fun Route.openAPI(path: String, modelSource: OpenAPISource = DefaultOpenAPISource, configure: OpenAPIConfig.() -> Unit = {})
-```
-
-Where the `OpenAPISource` argument is a functional interface:
+We can generalize the `swaggerFile` function argument by including a config property for specifying the source of the model: `source`.  This will be a property with the following type:
 
 ```kotlin
 fun interface OpenAPISource {
-    fun generate(application: Application): OpenAPIFragment
+    suspend fun generate(application: Application): OpenAPI
 }
 ```
 
-Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.  We use `OpenAPIFragment` here to represent a partial OpenAPI specification that can be converted for use in the rendered HTML.
+Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.
+
+The `OpenAPI` return type is imported from the `io.swagger.v3.oas.models` package.  Since this part of the external Swagger API is already exposed in Ktor, we can continue to use it for processing.
 
 The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatability, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
+
+To use multiple model sources, we'll provide some helper implementations:
+- `OpenAPISource.File`: Reads from a file, supplied through resources or the file system.
+- `OpenAPISource.Merged`: Merges multiple sources into a single model.
+- `OpenAPISource.Adapter`: For making custom corrections to the model.
+
+These will be composable through a convenient DSL provided in the configuration scope.  For example:
+
+```kotlin
+val fileSources = OpenApiSource("generated.json")
+
+openAPI("/docs") {
+    source = file("openapi/generated.json").adapt { it.paths.remove("internal/users") } + file("openapi/custom.json")
+}
+```
 
 ## Extensibility
 [extensibility]: #extensibility
