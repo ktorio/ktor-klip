@@ -46,7 +46,7 @@ There have been a few approaches taken already to generating OpenAPI specificati
 
 ## 1. IntelliJ Ultimate Plugin Auto-generator
 
-The Intellij plugin cannot be used on CI, as this is necessary to guarantee correctness for critical infrastructure (and often user-facing infrastructure). It also fails to provide the full range of features, or customization, for the OpenAPI specification. 
+The IntelliJ plugin cannot be used on CI, as this is necessary to guarantee correctness for critical infrastructure (and often user-facing infrastructure). It also fails to provide the full range of features, or customization, for the OpenAPI specification. 
 
 ## 2. Third-Party Ktor Plugins
 
@@ -209,7 +209,7 @@ Here is a list of the fields to be supported:
 | `@deprecated`   | `@deprecated reason`                            | Marks an endpoint as deprecated                              |
 | `@description`  | `@description text`                             | Provides a detailed endpoint description                     |
 | `@security`     | `@security scheme`                              | Documents security requirements                              |
-| `@externalDocs` | `@external href`                                | External documentation links                                 |
+| `@externalDocs` | `@externalDocs href`                            | External documentation links                                 |
 | `@ignore`       | `@ignore`                                       | Skips processing for this endpoint                           |
 
 #### Type references
@@ -235,7 +235,7 @@ Many of the fields will have fields of their own for building the model.  We'll 
 | Tag          | Format                           | Default                                                                            |
 |--------------|----------------------------------|------------------------------------------------------------------------------------|
 | `required`   | `required: true/false`           | When type is provided, inferred from `?`.  Otherwise, `false` for all but `@path`. |
-| `deprecated` | `deprecated: true/false`         | Describes a path parameter                                                         |
+| `deprecated` | `deprecated: true/false`         | false                                                                              |
 
 We'll also allow JSON Schema attributes to be included for all parameters.  You'll find these in a [Separate Appendix](appendices/open-api-json-schema-attributes.md).
 
@@ -316,7 +316,7 @@ Now, instead of simply parsing the model from a file, you can provide any implem
 
 The `OpenAPI` return type is imported from the `io.swagger.v3.oas.models` package.  Since this part of the external Swagger API is already exposed in Ktor, we can continue to use it for processing.
 
-The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatability, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
+The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatibility, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
 
 To use multiple model sources, we'll provide some helper implementations:
 - `OpenAPISource.File`: Reads from a file, supplied through resources or the file system.
@@ -372,7 +372,7 @@ Ktor provides a [type-safe routing API](https://ktor.io/docs/server-resources.ht
 # Drawbacks
 [drawbacks]: #drawbacks
 
-The main drawback of using the annotation API is that it does not enforce correspondence between the actual sourcecode and the resulting specification.  You can, for example, change the response type without changing the comment, which will result in a discrepancy.
+The main drawback of using the annotation API is that it does not enforce correspondence between the actual source code and the resulting specification.  You can, for example, change the response type without changing the comment, which will result in a discrepancy.
 
 You could also argue that having multiple sources to compile the specification creates unneeded complexity, which could lead to some difficulty when tracing problems in your specification.
 
