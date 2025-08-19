@@ -56,11 +56,11 @@ There are a few third-party solutions for generating OpenAPI documentation for K
 2. [Smiley4](https://github.com/SMILEY4/ktor-openapi-tools)
 3. [Tegral](https://github.com/utybo/tegral)
 
-These are good solutions, but they are not officially supported by Jetbrains and are reportedly quite intrusive and/or verbose in their approach to the API.
+These are all great solutions for runtime model generation, and will likely provide inspiration for future work on a more robust routing API; however, developers have voiced a desire for a less intrusive/verbose way to generate OpenAPI docs from their existing Ktor routes without the need for code changes.
 
 ## 3. InspeKtor Gradle Plugin
 
-[InspeKtor](https://github.com/tabilzad/inspektor) is a Gradle plugin that can be used to generate OpenAPI specifications from Ktor application code.  It relies on embedding extra information with annotations next to your routes or type-safe resources. 
+[InspeKtor](https://github.com/tabilzad/inspektor) is a Gradle plugin that can be used to generate OpenAPI specifications from Ktor application code.  It relies on embedding extra information with annotations next to your routes or type-safe resources.
 
 # Design Overview
 [design-overview]: #design-overview
@@ -210,6 +210,7 @@ Here is a list of the fields to be supported:
 | `@description`  | `@description text`                             | Provides a detailed endpoint description                     |
 | `@security`     | `@security scheme`                              | Documents security requirements                              |
 | `@externalDocs` | `@external href`                                | External documentation links                                 |
+| `@ignore`       | `@ignore`                                       | Skips processing for this endpoint                           |
 
 #### Type references
 
@@ -328,7 +329,7 @@ These will be composable through a convenient DSL provided in the configuration 
 val fileSources = OpenApiSource("generated.json")
 
 openAPI("/docs") {
-    source = file("openapi/generated.json").adapt { it.paths.remove("internal/users") } + file("openapi/custom.json")
+    source = file("openapi/generated.json").map { it.paths.remove("internal/users") } + file("openapi/custom.json")
 }
 ```
 
@@ -355,14 +356,8 @@ ktor {
     openapi {
         // top-level details may be provided in the gradle task call
         title = "My Service"
-        description = "Does all sorts of cool things"
+        summary = "Does all sorts of cool things"
         version = "1.0.0"
-        
-        // configure the gradle task for reading comments
-        analysis {
-            enabled = true
-            // output files, tweaking sources, etc.
-        }
     }
 }
 ```
