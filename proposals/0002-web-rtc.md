@@ -13,6 +13,13 @@
 2. [Motivation](#motivation)
 3. [Current Solutions](#current-solutions)
 4. [Design Overview](#design-overview)
+5. [Background: WebRTC, ICE, SDP, RTP](#background)
+6. [Design Details](#design-details)
+7. [Technical Details](#technical-details)
+8. [Drawbacks](#drawbacks)
+9. [Advantages](#advantages)
+10. [Open Questions](#open-questions)
+11. [Future Directions](#future-directions)
 
 <hr />
 
@@ -53,21 +60,269 @@ The [web-rtc](https://github.com/devopvoid/webrtc-java) provides a Java wrapper 
 
 The [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) is implemented for all major browsers, and
 can be accessed through Javascript.  There may still be some incompatibilities, so there is also a shim
-[adapter.js](https://github.com/webrtcHacks/adapter) to avoid issues.  The Javascript API has yet to be ported to
-[kotlinx.browser](https://github.com/Kotlin/kotlinx-browser), so it will require some more effort to access the browser
-API.
+[adapter.js](https://github.com/webrtcHacks/adapter) to avoid issues. 
+There exists a [kotlin-wrappers-browser](https://github.com/JetBrains/kotlin-wrappers) library for accessing main 
+browser APIs in Kotlin/JS and Kotlin/Wasm targets, including WebRTC.
 
 ## Peer.js
 
 [Peer.js](https://peerjs.com/) is a Javascript library that simplifies the interaction with the WebRTC API.  It is the
 most popular library for abstraction over WebRTC.
 
+## WebRTC.rs
+[WebRTC.rs](https://github.com/webrtc-rs/webrtc) is a pure-Rust implementation of the WebRTC stack that does not rely on
++Google’s native C++ library. Media capture support is limited; it can be sufficient for raw data transfer on native targets.
+
 # Design Overview
 [design-overview]: #design-overview
 
 Our primary focus ought to be the introduction of a common API for abstracting WebRTC across all platforms.  For the
-initial release, we'll publish the common API with a single implementation on the easiest platform.  Since we'll
-probably be relying on different base implementations, the modules will be separated as `ktor-client-web-rtc` for the
-common interfaces and `ktor-client-web-rtc-<impl>` for each implementation, rather than creating a single multiplatform
-library.  Most likely, we can start with translating the Typescript API to Kotlin using
-[dukat](https://github.com/Kotlin/dukat) for the `wasmJs` target.
+initial release, we'll publish the common API with a single implementation on the easiest platforms. We'll be relying on
+different base implementations, but there should be still one `ktor-client-webrtc` module to make testing consistent 
+without copying duplicating code. There is also more experimental `ktor-client-webrtc-rs` module which will be kept 
+separate because it relies on [Gobley](https://gobley.dev/docs/).
+
+# Background:
+[background]: #background
+
+This section gives a concise primer on the WebRTC, ICE, SDP, and RTP.
+
+- WebRTC
+  - WebRTC is a set of standards and APIs for real-time, peer-to-peer communication in browsers and native apps.
+  - A peer creates a `RTCPeerConnection` (represented here as `WebRtcPeerConnection`) which can carry two kinds of streams:
+    - `Media` (audio/video) via RTP/SRTP
+    - `Data` via SCTP over DTLS (exposed as `DataChannel`)
+  - WebRTC does not define signaling. Applications must exchange metadata (SDP offers/answers and ICE candidates) via an out-of-band channel (e.g., WebSocket, HTTP). This repo intentionally keeps signaling app-defined.
+
+- ICE (Interactive Connectivity Establishment)
+  - Purpose: find a working network path between peers across NATs/firewalls.
+  - Components:
+    - `ICE candidates`: potential connection endpoints gathered locally (host, server-reflexive via `STUN`, and relayed via `TURN`).
+    - `STUN` servers help discover the public-facing address/port.
+    - `TURN` servers relay traffic when direct paths fail.
+  - Flow (simplified):
+    1. Each peer gathers local candidates and sends them to the remote via signaling.
+    2. Peers run connectivity checks on candidate pairs (using STUN binding requests) to pick the best path.
+    3. ICE states evolve (`NEW` → `CHECKING` → `CONNECTED`/`COMPLETED` or `FAILED`).
+  - In this API, you observe `iceCandidates` and `iceConnectionState`/`iceGatheringState`; you can `addIceCandidate(...)` and optionally `awaitIceGatheringComplete()`.
+
+- SDP (Session Description Protocol)
+  - Purpose: describe session capabilities and parameters and agree on them using the Offer/Answer model (RFC 3264).
+  - Key parts:
+    - Global attributes (e.g., `fingerprint`, `ice-ufrag`, `ice-pwd`, `setup` role for DTLS).
+    - `m=` media sections for each media kind (audio, video, application/data).
+    - Codec lists and RTP parameters (payload types, `rtcp-mux`, `rtcp-fb`, `fmtp`).
+  - Flow (simplified):
+    1. Caller creates an `offer` (`createOffer()`), sets it locally, and sends it via signaling.
+    2. Callee sets remote offer, creates an `answer` (`createAnswer()`), sets it locally, and sends back.
+    3. Caller sets remote answer. Subsequent renegotiations repeat as needed (e.g., after `addTrack()` or `restartIce()`).
+
+- RTP / SRTP and RTCP
+  - `RTP` transports time-sensitive media packets; `SRTP` is the secure form used by WebRTC (keys established via DTLS-SRTP).
+  - `RTCP` carries control information (statistics, reception reports) used for quality adaptation.
+  - Relevant to this API: stats obtained via `pc.stats`/`getStatistics()` expose bitrate, packet loss, jitter, round-trip time, etc., typically derived from RTP/RTCP reports.
+
+# Design Details
+[design-details]: #design-details
+
+This KLIP introduces a common, multiplatform WebRTC client API layered around a pluggable engine abstraction. The API focuses on:
+- A single `WebRtcClient` facade constructed from a platform engine factory
+- A `WebRtcPeerConnection` representing a P2P connection
+- Data channels and media track abstractions
+- Reactive event streams over `Kotlin Flows` for ICE, signaling, tracks, data channels, and statistics
+
+High-level usage
+- Create a `WebRtcClient` by choosing a platform engine factory.
+  - JS/Wasm: `JsWebRtc`
+  - Android: `AndroidWebRtc`
+- Create a `WebRtcPeerConnection` with an optional per-connection configuration.
+- Perform SDP offer/answer negotiation via your app’s signaling layer.
+- Exchange ICE candidates via signaling while listening to `iceCandidates` `Flow`.
+- Optionally, create a data channel and send/receive messages.
+- Optionally add local audio/video media tracks; observe remote tracks via `TrackEvent` flow.
+
+Minimal examples
+
+Create a client
+```kotlin
+// JS/Wasm
+val jsClient = WebRtcClient(JsWebRtc) {
+    defaultConnectionConfig = {
+        iceServers = listOf(WebRtc.IceServer("stun:stun.l.google.com:19302"))
+        statsRefreshRate = 1000 // ms, or WEBRTC_STATISTICS_DISABLED (= -1, default)
+    }
+}
+
+// Android
+val androidClient = WebRtcClient(AndroidWebRtc) {
+    // Required: provide Android context via engine config block
+    context = appContext
+    defaultConnectionConfig = {
+        iceServers = listOf(WebRtc.IceServer("stun:stun.l.google.com:19302"))
+    }
+}
+```
+
+**Note:**
+- `WebRtcClient` delegates `WebRtcEngine` and is `Closeable`; call `client.close()` to release resources when done.
+- On Android, if you provide a custom `MediaTrackFactory`, you must also provide `AndroidWebRtcEngineConfig.rtcFactory`; otherwise an error will be thrown during `PeerConnection` creation.
+
+Create a connection and negotiate SDP
+```kotlin
+val pcCaller = jsClient.createPeerConnection() // or androidClient.createPeerConnection()
+
+// Caller
+val offer = pcCaller.createOffer()
+pcCaller.setLocalDescription(offer)
+// send offer.sdp to remote via your signaling
+
+// Callee description
+val pcCallee = jsClient.createPeerConnection() // or androidClient.createPeerConnection()
+pcCallee.setRemoteDescription(WebRtc.SessionDescription(WebRtc.SessionDescriptionType.OFFER, remoteOfferSdp))
+val answer = pcCallee.createAnswer()
+pcCallee.setLocalDescription(answer)
+// send answer.sdp back via signaling
+
+// Caller applies answer
+pcCaller.setRemoteDescription(WebRtc.SessionDescription(WebRtc.SessionDescriptionType.ANSWER, remoteAnswerSdp))
+```
+
+ICE candidate exchange
+```kotlin
+// Local candidates -> send via signaling
+scope.launch { pc1.iceCandidates.collect { candidate ->
+    // send candidate.candidate, candidate.sdpMid, candidate.sdpMLineIndex
+}}
+
+// Remote candidates received via signaling
+pc2.addIceCandidate(WebRtc.IceCandidate(candidateString, sdpMid, sdpMLineIndex))
+
+// Optionally await complete gathering
+pc2.awaitIceGatheringComplete() // pc2.iceGatheringState.first { it == IceGatheringState.COMPLETE }
+```
+
+Data channel
+```kotlin
+// Create a negotiated or in-band channel on one side
+val channel = pc1.createDataChannel("chat")
+
+// Listen to the channel lifecycle from the connection
+scope.launch { pc2.dataChannelEvents.collect { event ->
+    when (event) {
+        is DataChannelEvent.Open -> println("another peer opened a data chanel: ${event.channel}")
+        is DataChannelEvent.Closed -> println("closed")
+        else -> {}
+    }
+}}
+
+// Send/receive messages using Kotlin's `Channel`-like API. 
+scope.launch { channel.send("hello") }
+scope.launch { println("recv: "+ channel.receiveText()) }
+```
+
+Media tracks
+```kotlin
+// Create local tracks via the client's MediaTrackFactory
+// In the browser, it uses navigator.mediaDevices.getUserMedia under the hood.
+// In Android, it uses Camera2 API. Request camera/microphone permissions manually.
+val audio = jsClient.createAudioTrack { echoCancellation = true }
+val video = jsClient.createVideoTrack { width = 1280; height = 720 }
+
+// Add/remove tracks
+// After adding or removing tracks, you should renegotiate the connection to let the remote peer know about the change.
+// For example, call pc.restartIce() and repeat offer/answer exchange.
+val audioSender = pc.addTrack(audio)
+val videoSender = pc.addTrack(video)
+// Remove later via sender or track
+pc.removeTrack(audioSender)
+
+// Observe remote tracks
+scope.launch { pc.trackEvents.collect { ev ->
+    when (ev) {
+        is TrackEvent.Add -> println("remote track: ${ev.track.id} ${ev.track.kind}")
+        is TrackEvent.Remove -> println("remote track removed: ${ev.track.id}")
+    }
+}}
+```
+
+Negotiation triggers and stats
+- Listen to `negotiationNeeded` `SharedFlow` to decide when to produce a new offer (e.g., after `addTrack` or `restartIce`).
+- Configure `statsRefreshRate` in `WebRtcConnectionConfig` to periodically collect and expose stats via `pc.stats` `StateFlow`.
+
+Signaling is app-defined
+- This API intentionally avoids bundling signaling. See an example in [Ktor Chat](https://github.com/ktorio/ktor-chat/tree/gradle-migration-webrtc).
+  
+
+# Technical Details
+[technical-details]: #technical-details
+
+Modules and targets
+- `ktor-client-webrtc/common`: public API and common abstractions
+- `ktor-client-webrtc/jsAndWasmShared`: JS+Wasm engine based on [kotlin-wrappers](https://github.com/JetBrains/kotlin-wrappers)
+- `ktor-client-webrtc/android`: Android engine integration with [stream-webrtc-android](https://github.com/GetStream/webrtc-android)
+- Tests: common and platform-specific test stubs
+
+Engine factories
+- JS/Wasm: object `JsWebRtc` : `WebRtcClientEngineFactory<JsWebRtcEngineConfig>`
+  - Uses browser `RTCPeerConnection` and `Navigator` media devices
+- Android: object `AndroidWebRtc` : `WebRtcClientEngineFactory<AndroidWebRtcEngineConfig>`
+  - Requires Android context; uses `PeerConnectionFactory` and Android media devices
+  - If you supply a custom `MediaTrackFactory`, also set `AndroidWebRtcEngineConfig.rtcFactory`; otherwise engine initialization will fail
+
+Configuration surfaces
+- `WebRtcConfig` (engine-wide)
+  - `dispatcher`: background coroutine dispatcher for events
+  - `mediaTrackFactory`: override default media factory
+  - `defaultConnectionConfig`: default configuration for new connections
+- `WebRtcConnectionConfig` (per-connection)
+  - `iceServers`, `iceCandidatePoolSize`, `bundlePolicy`, `rtcpMuxPolicy`, `iceTransportPolicy`
+  - `statsRefreshRate` (ms), replay sizes for events (`remoteTracksReplay`, `dataChannelEventsReplay`, `iceCandidatesReplay`)
+  - `coroutineContext` for per-connection background tasks
+
+Events and flows
+- `WebRtcConnectionEvents` exposes `StateFlow`/`SharedFlow` for connection state, signaling state, ICE states, candidates, track events, data channel events, stats, and `negotiationNeeded`.
+- Replay sizes are tunable via `WebRtcConnectionConfig`. 
+
+Data channels
+- `WebRtcDataChannelOptions`: `id`, `protocol`, reliability (`ordered`, `maxRetransmits`, `maxPacketLifeTime`), `negotiated`
+- `DataChannelReceiveOptions`: channel `capacity`, overflow behavior (`onBufferOverflow`), `onUndeliveredElement` callback
+
+Media
+- `WebRtcMedia` provides `Audio`/`VideoTrack` constraints (`echoCancellation`, `width`/`height`, `frameRate`, `facingMode`, etc.).
+- `MediaTrackFactory` creates audio/video tracks; platform implementations wire permissions and device access.
+
+Testing and diagnostics
+- `statsRefreshRate` enables a periodic statistics collection surfaced via `pc.stats`, or manually request stats via `pc.getStatistics()`
+- Exceptions: `WebRtc.SdpException`, `WebRtc.IceException`; media-specific exceptions in `WebRtcMedia` (`PermissionException`, `DeviceException`)
+
+# Drawbacks
+[drawbacks]: #drawbacks
+
+- No built-in signaling: application authors must implement signaling transport and protocol.
+- Platform variance: subtle behavior differences across browsers/devices and Android WebRTC native library.
+- Permissions complexity on Android and browsers (user prompts, device readiness).
+- Not all WebRTC capabilities are abstracted yet (advanced RTP parameters, simulcast/SVC specifics, screen capture, etc.).
+
+# Advantages
+[advantages]: #advantages
+
+- Unified Kotlin API over WebRTC for multiple targets.
+- Reactive model via Kotlin Flows for connection, ICE, tracks, data channels, and stats.
+- Flexible configuration for connection behavior and stats.
+
+# Open Questions
+[open-questions]: #open-questions
+
+- Additional targets: iOS/native and JVM desktop feasibility and timeline.
+- Expanded media features: screen capture, device enumeration/selection.
+- Advanced RTP parameters, simulcast/SVC controls, and bandwidth adaptation APIs.
+- Reliability and schema of stats across platforms; common model alignment.
+
+# Future Directions
+[future-directions]: #future-directions
+
+- Add iOS/native engine using WebRTC native APIs.
+- Add JVM desktop engine via webrtc-java.
+- Keep working on `ktor-client-webrtc-rs`.
+- Enrich media support: screen sharing, device selection, constraint negotiation.
+- Improve diagnostics: richer stats, logging hooks, and integration with Ktor tooling.
