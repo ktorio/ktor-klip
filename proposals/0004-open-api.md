@@ -13,13 +13,15 @@
 3. [Current Solutions](#current-solutions)
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
+    1. [Static Analysis](#static-analysis)
+    2. [Path Information API](#path-information-api)
 6. [Technical Details](#technical-details)
-    1. [Routing API Introspection](#routing-api-introspection)
+    1. [Compiler plugin](#compiler-plugin)
     2. [KDocumentation API](#kdocumentation-api)
-    3. [Specification API](#specification-api)
-    4. [Gradle Plugin](#gradle-plugin)
-    5. [Type-safe routing](#type-safe-routing)
-    6. [Extensibility](#extensibility)
+    3. [Path Information API](#path-information-api-details)
+    4. [Open API / Swagger Plugin Improvements](#open-api--swagger-plugin-improvements)
+    5. [Extensibility](#extensibility)
+    6. [Gradle Plugin](#gradle-plugin)
 7. [Drawbacks](#drawbacks)
 8. [Advantages](#advantages)
 9. [Open Questions](#open-questions)
@@ -85,6 +87,7 @@ To address the requirements above, we propose a multifaceted approach:
 2. **Routing metadata API:** An extensible runtime routing metadata API for supplying and retrieving API details
 
 ## Static Analysis
+[static-analysis]: #static-analysis
 
 Here is a small example of the commenting API:
 
@@ -130,6 +133,7 @@ ktor {
 The Ktor Gradle plugin will include a Kotlin compiler plugin to handle parsing the comments and inferring other request details from the routing call expressions.  This information will be made available as routing metadata by making small transformations to the routing code so that information is provided at runtime.
 
 ## Path Information API
+[path-information-api]: #path-information-api
 
 To include the extra information in our routing tree at runtime, we'll leverage the existing `Route.attributes` field for holding the extra information.
 
@@ -176,7 +180,7 @@ In the following section, we'll go into greater detail on the specifics of both 
 In this section, we'll provide greater details on each of the OpenAPI specification system components.
 
 ## Compiler plugin
-[compiler-plugin]
+[compiler-plugin]: #compiler-plugin
 
 Because Ktor's routing API is a builder DSL, there are no declarations, annotations, or references that we can leverage at runtime for populating API documentation; so if we want to keep our current style of routing, we must introduce some code transformations to provide this information.
 
@@ -345,6 +349,7 @@ routing {
 
 There will be some cases where it will be impossible to relate an endpoint back to the comment, for example, when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
 
+<a id="path-information-api-details"></a>
 ## Path Information API
 
 The intent of the path information API is to provide a simple way to declare and retrieve relevant data regarding your endpoints in Ktor.  The information declared on your routes can be traversed, read, and combined to generate a full specification for OpenAPI or other kinds of contracts.
@@ -405,11 +410,6 @@ ktor {
 
 Note that the general properties of the specification are provided through the top-level `openapi` block.  The analysis block is used to configure the Gradle task that will read the comments in your source code.
 
-## Type-safe routing
-[type-safe-routing]: #type-safe-routing
-
-Ktor provides a [type-safe routing API](https://ktor.io/docs/server-resources.html) as an alternative to the standard DSL.  It includes a `@Resource` annotation for mapping the URL path to a class.  The annotation API should be extended so that annotations on the class will be merged with the annotations on the route declaration.
-
 # Drawbacks
 [drawbacks]: #drawbacks
 
@@ -429,7 +429,7 @@ The proposed solution addresses the need to provide an unobtrusive way to inject
 
 There are some important technical details that will require testing:
 
-1. How robust will the annotation processing be?
+1. How robust will the code analysis processing be?
     - For example, when calling the routing API from a custom function, can we trace the path value?
 2. What will be the performance impact?
     - If there is an impact, we ought to relegate the Gradle task to production builds only. 
@@ -441,6 +441,6 @@ During the prototyping phase, we should find answers to these questions and adju
 # Future Directions
 [future-directions]: #future-directions
 
-In this document, we mentioned plans for developing an alternative routing API that includes all required information.  We have not yet started work on this, but we expect to have a proposal ready in the next few months.
+In this document, we mentioned plans for developing an alternative routing API that includes all required information.
 
 For one possible approach to a more feature-rich routing API, you can explore the [Ktor-Typed](https://github.com/nomisRev/ktor-typed) repository.
