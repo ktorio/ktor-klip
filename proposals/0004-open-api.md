@@ -81,97 +81,162 @@ To summarize our high-level requirements, the tooling must:
 [design-details]: #design-details
 
 To address the requirements above, we propose a multifaceted approach:
-1. An extensible runtime specification generator which can infer details from the application state (i.e., routing, authorization, etc.)
-2. A compile-time code analysis tool for supplying all missing information to the specification generator.
-3. (Second phase) Introduce a new routing API that includes a greater share of the required information to mitigate possible inconsistencies.
+1. **Static analysis:** A compile-time code analysis tool for supplying all missing information to the route from KDoc comments.
+2. **Routing metadata API:** An extensible runtime routing metadata API for supplying and retrieving API details
 
-Here is how you might expect the API to look in the first phase of our design:
+## Static Analysis
+
+Here is a small example of the commenting API:
 
 ```kotlin
 /**
  * Get a specific user by ID
  * 
- * @tag [Users]
- * @param id The user identifier
- * @response 200 [User] found
- * @response 404 [User] not found
+ * @tag users
+ * @param id [Long] The user identifier
+ * @response 200 [User] The user with the supplied ID
+ * @response 400 [ErrorMessage] Invalid ID
+ * @response 404 [ErrorMessage] Not found
  */
 get("/{id}") {
-    val id = call.parameters["id"]?.toInt() ?: throw BadRequestException("Invalid ID")
-    call.respond(userService.getUser(id) ?: throw NotFoundException())
+   val id = call.parameters["id"]?.toInt() ?: return@get call.respond(HttpStatusCode.BadRequest)
+   call.respond(userService.getUser(id) ?: return@get call.respond(HttpStatusCode.NotFound))
 }
 ```
 
-As shown in the example, we intend to inject the missing path information using the KDoc comment syntax.  Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
+As shown in the example, we can inject missing route information using the KDoc comment syntax. Developers will be supported by IDE tooling to resolve code references in the comments, and it will prevent the need to modify any existing routes in the current routing API.
 
-The injection of the KDoc comments into the specification will need to be handled through a Gradle task, which may also include some top-level details like the name of the service:
+The parsing of the KDoc comments into the specification will need to be handled through the Ktor Gradle plugin, which will be extended to allow top-level service details:
 
 ```kotlin
 // in build.gradle.kts
 ktor {
+    @OptIn(OpenApiPreview::class)
     openapi {
-        // options for execution
-        enabled = true
-        strict = true
+        // Where to save the specification file
+        target = project.layout.projectDirectory.file("api.json")
         
         // top-level details may be provided
         title = "My Service"
-        description = "Does all sorts of cool things"
+        summary = "What it does"
+        description = "A longer description of the service"
         version = "1.0.0"
         
-        // output files, etc.
+        // contact, termsOfService, license...
     }
 }
 ```
 
-As the server is running, it will merge multiple sources:
- - Files (output from the gradle task, or manually created)
- - Routing
- - Authorization plugin
- - Content negotiation plugin
+The Ktor Gradle plugin will include a Kotlin compiler plugin to handle parsing the comments and inferring other request details from the routing call expressions.  This information will be made available as routing metadata by making small transformations to the routing code so that information is provided at runtime.
 
-These will be selected through your application properties file and exposed as a dynamic model which is served from your OpenAPI endpoint.
+## Path Information API
 
-In the following section, we'll provide details on all of the above sources and how each field is populated to form the final OpenAPI specification.  Additionally, we'll cover the introspection API for processing the endpoint details that will be used for generating the specification.
+To include the extra information in our routing tree at runtime, we'll leverage the existing `Route.attributes` field for holding the extra information.
+
+Declaring and retrieving the path info will be supported by easy-to-use extension functions and builder DSLs.
+
+Here is how the extension function might look:
+
+```kotlin
+fun Route.annotate(configure: OperationDsl.Builder.() -> Unit): Route {
+    attributes[PathInfo.Attribute] = PathInfo.Builder().configure()
+    return this
+}
+```
+
+From the routing DSL, the inclusion of path information would appear as:
+
+```kotlin
+routing {
+    get("/articles") {
+        val query = call.queryParameters["q"]?.let(::parseQuery)
+        call.respond(articleRepository.findArticles(query))
+    }.annotate {
+        parameters {
+            query("q")
+        }
+        responses {
+            HttpStatusCode.OK {
+                summary = "A list of articles"
+                contentType = ContentType.Application.Json
+                schema = jsonSchema<List<Article>>()
+            }
+        }
+    }
+}
+```
+
+This type of API can introduce a fair amount of clutter to your endpoints, which is why in general practice we expect the compiler plugin to supply this information from comments and static analysis.
+
+In the following section, we'll go into greater detail on the specifics of both the static code analysis, and the runtime API.
 
 # Technical Details
 [technical-details]: #technical-details
 
-In this section, we'll discuss the details of the implementation.
+In this section, we'll provide greater details on each of the OpenAPI specification system components.
 
-## Routing API Introspection
-[routing-api-introspection]: #routing-api-introspection
+## Compiler plugin
+[compiler-plugin]
 
-Our routing API builds an internal model which is already accessible from the application state.  It provides a limited set of details that can be used to populate the path information for the OpenAPI endpoints.
+Because Ktor's routing API is a builder DSL, there are no declarations, annotations, or references that we can leverage at runtime for populating API documentation; so if we want to keep our current style of routing, we must introduce some code transformations to provide this information.
 
-Here is an example of the routing API:
+Considering the earlier example:
 
 ```kotlin
-routing {
-    route("/api/v1") {
-        get("/users") {
-            call.respond(userService.getUsers())
-        }
-        get("/users/{id}") {
-            val id = call.parameters["id"]?.toInt() ?: throw BadRequestException("Invalid ID")
-            call.respond(userService.getUser(id) ?: throw NotFoundException())
-        }
-        post("/users") {
-            userService.createUser(call.receive())
-            call.respond(HttpStatusCode.Created)
+get("/users/{id}") {
+   val id = call.parameters["id"]?.toInt() ?: return@get call.respond(HttpStatusCode.BadRequest)
+   call.respond(userService.getUser(id) ?: return@get call.respond(HttpStatusCode.NotFound))
+}
+```
+
+We can infer the following:
+- The method and path are already available at runtime through the route selector tree.
+- The path parameter "id" is read.
+- There are three types of responses:
+  1. 400 Bad request
+  2. 404 Not found
+  3. 200 OK with the schema derived from the user type
+
+Then, we can derive the default content type from the `ContentNegotiation` plugin.
+
+Finally, we can provide this information at runtime by making the following transformation:
+
+```kotlin
+get("/users/{id}") {
+   val id = call.parameters["id"]?.toInt() ?: return@get call.respond(HttpStatusCode.BadRequest)
+   call.respond(userService.getUser(id) ?: return@get call.respond(HttpStatusCode.NotFound))
+}.pathInfo {
+    parameters {
+        path("id")
+    }
+    responses {
+        HttpStatusCode.BadRequest()
+        HttpStatusCode.NotFound()
+        HttpStatusCode.OK {
+            contentType = ContentType.Application.Json
+            schema = jsonSchema<List<Article>>()
         }
     }
 }
 ```
 
-As each route in the example is defined from the DSL, it is added to the application's internal model.  We can use this model to infer details pertaining to each route:
-1. The merged path
-2. The path parameters
-3. The HTTP method
+Descriptions and other information can be supplied through comments, and developers can also supply metadata through the same parameter as needed.
 
-Because the handling of parameters and responses is contained to the route's lambda argument, we cannot infer details about them for the specification.  As a result, the default model will appear very basic without additional sources.
+To see all the types of available inferences at compile time, consult the following table:
 
-To address this requirement, we indent to supplement the path information with a KDoc-like annotation API that can be read by our Gradle plugin.
+| Inference           | Code Example                             |
+|---------------------|------------------------------------------|
+| Responses           | `call.respond(articles)`                 |
+| Path Parameters     | `call.pathParameters["id"]`              |
+| Query parameters    | `call.queryParameters["name"]`           |
+| Request Headers     | `call.request.headers["X-Paging"]`       |
+| Response Headers    | `call.response.header("X-Info", "abc")`  |
+| Authenticate        | `authenticate("oauth2") {}`              |
+| Authentication      | `authentication { basic("auth") }`       |
+| Content Negotiation | `install(ContentNegotiation) { json() }` |
+| Call Receive        | `call.receive<Post>()`                   |
+
+As well as these code inferences, we'll also provide a means to augment your documentation using KDoc comments.
 
 ## KDocumentation API
 [kdocumentation-api]: #kdocumentation-api
@@ -280,58 +345,35 @@ routing {
 
 There will be some cases where it will be impossible to relate an endpoint back to the comment, for example, when a dynamic string is used to define the path.  In these cases, the developer will need to manually configure the provided model using the specification API.
 
-## Specification API
-[specification-api]: #specification-api
+## Path Information API
 
-To support the generation of the OpenAPI specification, we'll be extending our current OpenAPI plugin with several new functions that hook into the dynamic model generation.
+The intent of the path information API is to provide a simple way to declare and retrieve relevant data regarding your endpoints in Ktor.  The information declared on your routes can be traversed, read, and combined to generate a full specification for OpenAPI or other kinds of contracts.
 
-Our current plugin has a single routing function that can be used for serving your specification from a file:
+The basic function for storing to the route attributes was already provided in the design details, but here we'll explore the declaration DSL and how to retrieve the information at runtime.
 
-```kotlin
-routing {
-    // path and swaggerFile are optional
-    openAPI(path="openapi", swaggerFile = "openapi/documentation.yaml") {
-        // OpenAPIConfig.() -> Unit
-        codegen = StaticHtmlCodegen()
-    }
-}
-```
+### Declaration DSL
 
-The `OpenAPIConfig` class contains the following properties:
-- `parser`: The parser to use for parsing the model.
-- `opts`: Options for the generator.
-- `generator`: The generator for supplying the backing files for the web generator.
-- `codegen`: The code generator for building the web page.
-- `options`: Parser options.
+The operation details assigned to Ktor routes will have an accompanying DSL for injection and manipulation.
 
-We can generalize the `swaggerFile` function argument by including a config property for specifying the source of the model: `source`.  This will be a property with the following type:
+You can find a partial implementation at [appendices/open-api-dsl.kt](appendices/open-api-dsl.kt).
 
-```kotlin
-fun interface OpenAPISource {
-    suspend fun generate(application: Application): OpenAPI
-}
-```
+This DSL will be called from the compiler plugin to inject details inferred from the code structure.
 
-Now, instead of simply parsing the model from a file, you can provide any implementation for populating the model.
+### Route Traversal
 
-The `OpenAPI` return type is imported from the `io.swagger.v3.oas.models` package.  Since this part of the external Swagger API is already exposed in Ktor, we can continue to use it for processing.
+With the newly introduced metadata for our routes, we can now produce a complete model by traversing all routes in the routing tree.
 
-The `DefaultOpenAPISource` implementation will use a combination of the application's internal state and any model files supplied to some default paths.  To keep backwards compatibility, it will first give preference to the `openapi/documentation.yaml` file, then fallback to the routing API's internal state, combined with the annotation API's output files.
+This can be done with the high-level procedure:
+1. Get the root of the tree.
+2. For each child:
+    1. If node is a leaf, combine metadata from ancestors and include it as an operation model.
+    2. Else, return to step 2.
 
-To use multiple model sources, we'll provide some helper implementations:
-- `OpenAPISource.File`: Reads from a file, supplied through resources or the file system.
-- `OpenAPISource.Merged`: Merges multiple sources into a single model.
-- `OpenAPISource.Adapter`: For making custom corrections to the model.
+We can perform this from an endpoint currently by starting from `call.route` and find the root through its parent relations, then using the metadata stored in the attributes to build the model.  This requires some casting from the interface `Route` to the implementation `RoutingNode`, so it's not ideal for extension.  We may want to introduce some helper functions and a visitor pattern to allow for easier analysis of the routing state of an application.
 
-These will be composable through a convenient DSL provided in the configuration scope.  For example:
+## Open API / Swagger Plugin Improvements
 
-```kotlin
-val fileSources = OpenApiSource("generated.json")
-
-openAPI("/docs") {
-    source = file("openapi/generated.json").map { it.paths.remove("internal/users") } + file("openapi/custom.json")
-}
-```
+Because we're introducing the runtime construction of an OpenAPI model, we'll need to revisit our use of file references for the OpenAPI and Swagger plugins.  It's unlikely the routing will change during the execution of an application's lifetime, so the simplest approach would be to introduce some creation and caching pipeline for the model file.
 
 ## Extensibility
 [extensibility]: #extensibility
@@ -341,7 +383,6 @@ The functionality of the generation ought to be extensible in the following ways
 1. Overriding the comment-parsing in the compiler plugin using a custom function.
 2. Ability to serve different specifications using the OpenAPI sources.
 3. Providing custom sources for the model.
-
 
 ## Gradle Plugin
 [gradle-plugin]: #gradle-plugin
