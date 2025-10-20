@@ -35,6 +35,7 @@ High-level usage:
 - [Create a `WebRtcClient`](#create-a-client) by choosing a platform engine factory.
     - JS/Wasm: `JsWebRtc`
     - Android: `AndroidWebRtc`
+    - iOS: `IosWebRtc`
 - [Create a `WebRtcPeerConnection`](#create-a-connection-and-negotiate-sdp) with an optional configuration.
 - [Perform SDP offer/answer negotiation](#create-a-connection-and-negotiate-sdp).
 - [Exchange ICE candidates](#ice-candidate-exchange) via signaling.
@@ -89,7 +90,7 @@ This section gives a concise primer on WebRTC, ICE, SDP, and RTP.
     - Flow (simplified):
         1. Caller creates an `offer` (`createOffer()`), sets it locally, and sends it via signaling.
         2. Callee sets remote offer, creates an `answer` (`createAnswer()`), sets it locally, and sends back.
-        3. Caller sets remote answer. Subsequent renegotiations repeat as needed (e.g., after `addTrack()` or
+        3. Caller sets a remote answer. Later renegotiations repeat as needed (e.g., after `addTrack()` or
            `restartIce()`).
 
 - RTP / SRTP and RTCP
@@ -114,21 +115,21 @@ The [webrtc-java](https://github.com/devopvoid/webrtc-java) provides a Java wrap
 
 ## WebRTC Browser API
 
-The [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) is implemented for all major browsers, and
-can be accessed through Javascript. There may still be some incompatibilities, so there is also a shim
+The [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API) is implemented for all major browsers and
+can be accessed through JavaScript. There may still be some incompatibilities, so there is also a shim
 [adapter.js](https://github.com/webrtcHacks/adapter) to avoid issues.
 There exists a [kotlin-wrappers-browser](https://github.com/JetBrains/kotlin-wrappers) library for accessing main
 browser APIs in Kotlin/JS and Kotlin/Wasm targets, including WebRTC.
 
 ## Peer.js
 
-[Peer.js](https://peerjs.com/) is a Javascript library that simplifies the interaction with the WebRTC API. It is the
+[Peer.js](https://peerjs.com/) is a JavaScript library that simplifies the interaction with the WebRTC API. It is the
 most popular library for abstraction over WebRTC.
 
 ## WebRTC.rs
 
 [webrtc-rs](https://github.com/webrtc-rs/webrtc) is a pure-Rust implementation of the WebRTC stack that does not rely on
-+Google’s native C++ library. Media capture support is limited; it can be sufficient for raw data transfer on native
++Google’s native C++ library. Media capture support is limited; it can be enough for raw data transfer on native
 targets.
 
 # Design Details
@@ -153,7 +154,7 @@ focuses on:
 val jsClient = WebRtcClient(JsWebRtc) {
     defaultConnectionConfig = {
         iceServers = listOf(WebRtc.IceServer("stun:stun.l.google.com:19302"))
-        statsRefreshRate = 1000 // ms, or WEBRTC_STATISTICS_DISABLED (= -1, default)
+        statsRefreshRate = 5.seconds
     }
 }
 
@@ -164,6 +165,11 @@ val androidClient = WebRtcClient(AndroidWebRtc) {
     defaultConnectionConfig = {
         iceServers = listOf(WebRtc.IceServer("stun:stun.l.google.com:19302"))
     }
+}
+
+// iOS
+val iosClient = WebRtcClient(IosWebRtc) {
+    // the same config here
 }
 ```
 
@@ -221,8 +227,8 @@ val channel = pc1.createDataChannel("chat")
 scope.launch {
     pc2.dataChannelEvents.collect { event ->
         when (event) {
-            is DataChannelEvent.Open -> println("another peer opened a data chanel: ${event.channel}")
-            is DataChannelEvent.Closed -> println("closed")
+            is DataChannelEvent.Open -> println("Opened a new data channel: ${event.channel}")
+            is DataChannelEvent.Closed -> println("Data channel closed: ${event.channel}")
             else -> {}
         }
     }
@@ -271,7 +277,93 @@ scope.launch {
 ### Signaling
 
 - This API intentionally avoids bundling signaling. See an example
-  in [Ktor Chat](https://github.com/ktorio/ktor-chat/tree/gradle-migration-webrtc).
+  in [Ktor Chat](https://github.com/ktorio/ktor-chat).
+
+## Using with Compose Multiplatform examples
+
+This API provides a high-level abstraction over WebRTC, but it is not a replacement for the platform-specific APIs.
+There are many extensions that allow you to retrieve the implementations used under the hood. 
+Platform-specific libraries are exposed as transitive libraries, except of `WebRTC-SDK` CocoaPod for iOS.
+Code snippets are taken from [Ktor Chat](https://github.com/ktorio/ktor-chat).
+
+### Compose/Web
+```kotlin
+@Composable
+fun VideoRenderer(
+    videoTrack: WebRtcMedia.VideoTrack,
+    modifier: androidx.compose.ui.Modifier
+) {
+    fun getStream(): MediaStream {
+        return org.w3c.dom.mediacapture.MediaStream().apply {
+            val track: web.mediastreams.MediaStreamTrack = videoTrack.getNative() // `kotlin-wrappers`
+            @Suppress("CAST_NEVER_SUCCEEDS") // cast `kotlin-wrappers` to `org.w3c.dom`
+            addTrack(track as org.w3c.dom.mediacapture.MediaStreamTrack)
+        }
+    }
+    WebElementView(
+        factory = {
+            (document.createElement("video") as HTMLVideoElement).apply {
+                srcObject = getStream()
+                autoplay = true
+            }
+        },
+        modifier = modifier,
+        update = { video ->
+            video.srcObject = getStream()
+        }
+    )
+}
+```
+
+### Compose/Android
+```kotlin
+@Composable
+fun AudioRenderer(audioTrack: WebRtcMedia.AudioTrack) {
+    DisposableEffect(audioTrack) {
+        audioTrack.enable(true)
+        onDispose {
+            audioTrack.enable(false)
+        }
+    }
+}
+```
+
+### Compose/iOS
+```kotlin
+@Composable
+fun VideoRenderer(
+    videoTrack: WebRtcMedia.VideoTrack,
+    modifier: androidx.compose.ui.Modifier
+) {
+    UIKitView(
+        factory = {
+            `WebRTC-SDK`.RTCMTLVideoView().apply {
+                videoTrack.getNative().addRenderer(this)
+            }
+        },
+        modifier = modifier,
+        onRelease = { 
+            videoTrack.getNative().removeRenderer(it)
+        },
+    )
+}
+``` 
+
+If you want to use the `getNative()` methods on iOS, you would need `WebRTC-SDK` CocoaPod added to your project because 
+it cannot be transitively included in the library.
+```kotlin
+// build.gradle.kts
+kotlin {
+    cocoapods {
+        // configure your pods here
+        pod("WebRTC-SDK") {
+            version = "..."
+            moduleName = "WebRTC" // you can change the module name for convenience
+            packageName = "WebRTC"
+        }
+    }
+}
+```
 
 # Technical Details
 
@@ -282,6 +374,9 @@ Modules and targets
   on [kotlin-wrappers](https://github.com/JetBrains/kotlin-wrappers)
 - `ktor-client-webrtc/android`: Android engine integration
   with [stream-webrtc-android](https://github.com/GetStream/webrtc-android)
+- `ktor-client-webrtc/ios`: iOS engine integration based on
+  [WebRTC-SDK CocoaPod](https://github.com/webrtc-sdk/Specs)
+- `ktor-client-webrtc/test`: common test stubs
 - Tests: common and platform-specific test stubs
 
 Engine factories
@@ -290,8 +385,9 @@ Engine factories
     - Uses browser `RTCPeerConnection` and `Navigator` media devices
 - [Android](#create-a-client): object `AndroidWebRtc` : `WebRtcClientEngineFactory<AndroidWebRtcEngineConfig>`
     - Requires Android context; uses `PeerConnectionFactory` and Android media devices
-    - If you supply a custom `MediaTrackFactory`, also set `AndroidWebRtcEngineConfig.rtcFactory`; otherwise engine
-      initialization will fail
+    - If you supply a custom `MediaTrackFactory`, also set `AndroidWebRtcEngineConfig.rtcFactory`; otherwise engine initialization will fail
+- [iOS](#create-a-client): object `IosWebRtc` : `WebRtcClientEngineFactory<IosWebRtcEngineConfig>`
+    - If you supply a custom `MediaTrackFactory`, also set `IosWebRtcEngineConfig.rtcFactory`; otherwise engine initialization will fail
 
 Configuration surfaces
 
@@ -301,9 +397,9 @@ Configuration surfaces
     - `defaultConnectionConfig`: default configuration for new connections
 - `WebRtcConnectionConfig` (per-connection)
     - `iceServers`, `iceCandidatePoolSize`, `bundlePolicy`, `rtcpMuxPolicy`, `iceTransportPolicy`
-    - `statsRefreshRate` (ms), replay sizes for events (`remoteTracksReplay`, `dataChannelEventsReplay`,
+    - `statsRefreshRate`, replay sizes for events (`remoteTracksReplay`, `dataChannelEventsReplay`,
       `iceCandidatesReplay`)
-    - `coroutineContext` for per-connection background tasks
+    - `exceptionHandler` to catch background exceptions
 
 Events and flows
 
@@ -344,14 +440,12 @@ Testing and diagnostics
 
 # Open Questions
 
-- Additional targets: iOS/native and JVM desktop feasibility and timeline.
 - Expanded media features: screen capture, device enumeration/selection.
 - Advanced RTP parameters, simulcast/SVC controls, and bandwidth adaptation APIs.
 - Reliability and schema of stats across platforms; common model alignment.
 
 # Future Directions
 
-- Add iOS/native engine using WebRTC native APIs.
 - Add JVM desktop engine via webrtc-java.
 - Release `ktor-client-webrtc-rs` as [Gobley](https://gobley.dev/docs/) stabilizes.
 - Minimize behavior differences across all platforms.
