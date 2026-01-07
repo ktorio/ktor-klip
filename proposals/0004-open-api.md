@@ -17,7 +17,7 @@
     2. [Path Information API](#path-information-api)
 6. [Technical Details](#technical-details)
     1. [Compiler plugin](#compiler-plugin)
-    2. [KDocumentation API](#kdocumentation-api)
+    2. [Markdown Documentation API](#markdown-documentation-api)
     3. [Path Information API](#path-information-api-details)
     4. [Open API / Swagger Plugin Improvements](#open-api--swagger-plugin-improvements)
     5. [Extensibility](#extensibility)
@@ -95,11 +95,12 @@ Here is a small example of the commenting API:
 /**
  * Get a specific user by ID
  * 
- * @tag users
- * @param id [Long] The user identifier
- * @response 200 [User] The user with the supplied ID
- * @response 400 [ErrorMessage] Invalid ID
- * @response 404 [ErrorMessage] Not found
+ * - Tag: users
+ * - Path: id [Long] The user identifier
+ * - Responses:
+ *   - 200 [User] The user with the supplied ID
+ *   - 400 [ErrorMessage] Invalid ID
+ *   - 404 [ErrorMessage] Not found
  */
 get("/{id}") {
    val id = call.parameters["id"]?.toInt() ?: return@get call.respond(HttpStatusCode.BadRequest)
@@ -242,8 +243,8 @@ To see all the types of available inferences at compile time, consult the follow
 
 As well as these code inferences, we'll also provide a means to augment your documentation using KDoc comments.
 
-## KDocumentation API
-[kdocumentation-api]: #kdocumentation-api
+## Markdown Documentation API
+[markdown-documentation-api]: #markdown-documentation-api
 
 The annotation API provides a non-intrusive way to enhance the OpenAPI specification with details that cannot be inferred from code.
 
@@ -253,8 +254,8 @@ Each endpoint will need to be annotated with a KDoc comment that follows this ge
 /**
  * A summary of the endpoint
  * 
- * @<key> <value>
- *     <attribute>: <value>
+ * - <key>: <value>
+ *   - <attribute-key>: <value>
  * ...
  */
 get("/widgets") {
@@ -262,24 +263,34 @@ get("/widgets") {
 }
 ```
 
-### KDoc Fields
+### Fields
 
 Here is a list of the fields to be supported:
 
-| Tag             | Format                                          | Description                                                  |
-|-----------------|-------------------------------------------------|--------------------------------------------------------------|
-| `@tags`         | `@tags *name`                                   | Associates the endpoint with a tag for grouping              |
-| `@path`         | `@path [Type] name description`                 | Describes a path parameter                                   |
-| `@query`        | `@query [Type] name description`                | Describes a query parameter                                  |
-| `@header`       | `@header [Type] name description`               | Describes a header parameter                                 |
-| `@cookie`       | `@cookie [Type] name description`               | Describes a cookie parameter                                 |
-| `@body`         | `@body contentType [Type] description`          | Documents the request body type                              |
-| `@response`     | `@response code contentType [Type] description` | Documents a response code with optional type and description |
-| `@deprecated`   | `@deprecated reason`                            | Marks an endpoint as deprecated                              |
-| `@description`  | `@description text`                             | Provides a detailed endpoint description                     |
-| `@security`     | `@security scheme`                              | Documents security requirements                              |
-| `@externalDocs` | `@externalDocs href`                            | External documentation links                                 |
-| `@ignore`       | `@ignore`                                       | Skips processing for this endpoint                           |
+| Keyword              | Format                                          | Description                                                  |
+|----------------------|-------------------------------------------------|--------------------------------------------------------------|
+| tag                  | `tag: *name`                                    | Associates the endpoint with a tag for grouping              |
+| path( parameter)(s)  | `path: [Type] name description`                 | Describes a path parameter                                   |
+| query( parameter)(s) | `query: [Type] name description`                | Describes a query parameter                                  |
+| header(s)            | `header: [Type] name description`               | Describes a header parameter                                 |
+| cookie(s)            | `cookie: [Type] name description`               | Describes a cookie parameter                                 |
+| body                 | `body: contentType [Type] description`          | Documents the request body type                              |
+| response(s)          | `response: code contentType [Type] description` | Documents a response code with optional type and description |
+| deprecated           | `deprecated: reason`                            | Marks an endpoint as deprecated                              |
+| description          | `description: text`                             | Provides a detailed endpoint description                     |
+| security             | `security: scheme`                              | Documents security requirements                              |
+| externalDocs         | `externalDocs: href`                            | External documentation links                                 |
+| ignore               | `ignore`                                        | Skips processing for this endpoint                           |
+
+For a convenient short-hand, you can also group responses, tags, and parameters like so:
+
+```markdown
+- Responses:
+  - 200 [String] A list of widgets
+  – 404 [ErrorMessage] Not found
+```
+
+Applying extra attributes for these responses will be read when nested one level deeper than the response list item.
 
 #### Type references
 
@@ -296,8 +307,8 @@ Because KDoc links do not support optional modifiers or generics, we can use a c
 #### Attributes
 
 Many of the fields will have fields of their own for building the model.  We'll break these down into the following subsections:
-- Parameter attributes: `@path`, `@query`, `@header`, `@cookie`
-- Response attributes: `@response`
+- Parameter attributes: `path`, `query`, `header`, `cookie`
+- Response attributes: `response`
 
 ##### Parameter attributes
 
@@ -323,18 +334,20 @@ routing {
     /**
      * Get a list of widgets
      * 
-     * @tags widgets
-     * @path [String] id Widget library ID
-     *   pattern: [a-e0-9]{6,8}
-     * @query [Int]? limit The maximum number of widgets to return
-     *   minimum: 1
-     *   default: 50
-     * @query [String]? sort The sort field
-     *   enum: [name, created]
-     *   default: name
-     * @query [Boolean] archived Whether to include archived widgets
-     * @response 200 [String]:[com.acme.Widget] A list of widgets
-     * @response 404 [com.acme.Widget]+ Not found
+     * - Tag: widgets
+     * - Path: [String] id Widget library ID
+     *     pattern: [a-e0-9]{6,8}
+     * - Query parameters:
+     *   - [Int]? limit The maximum number of widgets to return
+     *       minimum: 1
+     *       default: 50
+     *   - [String]? sort The sort field
+     *       enum: [name, created]
+     *       default: name
+     *    - [Boolean] archived Whether to include archived widgets
+     * - Responses:
+     *   - 200 [String]:[com.acme.Widget] A list of widgets
+     *   - 404 [com.acme.Widget]+ Not found
      */
     get("/widgets/{id}") {
         call.respond(repository.find(
