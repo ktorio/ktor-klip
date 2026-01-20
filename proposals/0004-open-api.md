@@ -117,16 +117,14 @@ The parsing of the KDoc comments into the specification will need to be handled 
 ktor {
     @OptIn(OpenApiPreview::class)
     openapi {
-        // Where to save the specification file
-        target = project.layout.projectDirectory.file("api.json")
+        // toggles the compiler plugin
+        enabled = true
         
-        // top-level details may be provided
-        title = "My Service"
-        summary = "What it does"
-        description = "A longer description of the service"
-        version = "1.0.0"
-        
-        // contact, termsOfService, license...
+        // toggles code inference
+       codeInferenceEnabled = true
+       
+       // ignores uncommented endpoints
+       onlyCommented = true
     }
 }
 ```
@@ -143,7 +141,7 @@ Declaring and retrieving the path info will be supported by easy-to-use extensio
 Here is how the extension function might look:
 
 ```kotlin
-fun Route.annotate(configure: OperationDsl.Builder.() -> Unit): Route {
+fun Route.describe(configure: OperationDsl.Builder.() -> Unit): Route {
     attributes[PathInfo.Attribute] = PathInfo.Builder().configure()
     return this
 }
@@ -156,7 +154,7 @@ routing {
     get("/articles") {
         val query = call.queryParameters["q"]?.let(::parseQuery)
         call.respond(articleRepository.findArticles(query))
-    }.annotate {
+    }.describe {
         parameters {
             query("q")
         }
@@ -405,7 +403,7 @@ The functionality of the generation ought to be extensible in the following ways
 ## Gradle Plugin
 [gradle-plugin]: #gradle-plugin
 
-The Gradle plugin component of this feature will be an extension of the current Ktor gradle plugin.  It will govern the task of generating parts of the OpenAPI specification during build time.
+The Gradle plugin component of this feature will be an extension of the current Ktor gradle plugin.  It will handle the properties supplied to the compiler plugin, which will inject OpenAPI information into the routing DSL.
 
 Returning to our earlier example, you can see the general appearance of the DSL inside a gradle build script:
 
@@ -413,15 +411,11 @@ Returning to our earlier example, you can see the general appearance of the DSL 
 // in build.gradle.kts
 ktor {
     openapi {
-        // top-level details may be provided in the gradle task call
-        title = "My Service"
-        summary = "Does all sorts of cool things"
-        version = "1.0.0"
+        // enable or disable processing
+        enabled = true
     }
 }
 ```
-
-Note that the general properties of the specification are provided through the top-level `openapi` block.  The analysis block is used to configure the Gradle task that will read the comments in your source code.
 
 # Drawbacks
 [drawbacks]: #drawbacks
