@@ -246,14 +246,14 @@ sequenceDiagram
     Ktor->>Ktor: Resolve principal from session
     Ktor-->>User: 200 OK
 
-    Note over User,IDP: Token refresh (opt-in)
-    User->>Ktor: GET /oidc/google/refresh
+    Note over User,IDP: Token refresh (opt-in, POST)
+    User->>Ktor: POST /oidc/google/refresh
     Ktor->>IDP: POST /token (grant_type=refresh_token)
     IDP-->>Ktor: New tokens
     Ktor->>User: Updated session cookie
 
-    Note over User,IDP: Logout
-    User->>Ktor: GET /oidc/google/logout
+    Note over User,IDP: Logout (POST)
+    User->>Ktor: POST /oidc/google/logout
     Ktor->>Ktor: Clear session
     Ktor->>User: 302 to IDP end_session_endpoint (if available)
 ```
@@ -302,7 +302,7 @@ provider("google") {
         }
 
         tokenSources = {
-            authorizationHeader() 
+            authorizationHeader() // default
             session()
             custom { call -> call.request.cookies["MY_TOKEN"] }
         }
@@ -310,19 +310,28 @@ provider("google") {
 }
 ```
 
-## Step 3 — Configure Session Transport
+## Step 3 — Configure Sessions
 
-Define how the session is managed. Defaults are secure, but every aspect
-is customizable:
+Sessions are not enabled by default. Add a `sessions { }` block to opt in.
+When sessions are enabled, CSRF protection via `originMatchesHost()` is active
+by default — the plugin verifies the `Origin` header matches the server's host
+on state-changing requests (POST), blocking cross-origin form submissions and
+fetch calls.
 
 ```kotlin
 provider("google") {
     // ...credentials from Step 1...
 
-    sessionTransport = SessionTransport.Cookie(name = "GOOGLE_SESSION") {
-        cookie.secure = true
-        cookie.httpOnly = true
-        cookie.extensions["SameSite"] = "lax"
+    sessions {
+        name = "GOOGLE_SESSION"
+        cookie {
+            cookie.secure = true
+            cookie.httpOnly = true
+            cookie.extensions["SameSite"] = "lax"
+        }
+        csrfProtection {
+            originMatchesHost()
+        }
     }
 }
 ```
@@ -330,7 +339,9 @@ provider("google") {
 ## Step 4 — Configure the OAuth Flow
 
 Define scopes, route paths, and success/failure callbacks. Routes follow the
-pattern `/oidc/{providerName}/{action}` by default:
+pattern `/oidc/{providerName}/{action}` by default. Login and callback are GET
+routes; refresh and logout are **POST routes** protected by the session's CSRF
+origin check:
 
 ```kotlin
 provider("google") {
@@ -343,10 +354,10 @@ provider("google") {
         resourceIndicators = listOf("https://api.example.com")
 
         // Default pattern: /oidc/{providerName}/{action} — set null to disable.
-        loginUri = { path("oidc", "google", "login") }
-        redirectUri = { path("oidc", "google", "callback") }
-        logoutUri = { path("oidc", "google", "logout") }
-        refreshUri = { path("oidc", "google", "refresh") }
+        loginUri = { path("oidc", "google", "login") }       // GET
+        redirectUri = { path("oidc", "google", "callback") }  // GET
+        logoutUri = { path("oidc", "google", "logout") }      // POST
+        refreshUri = { path("oidc", "google", "refresh") }    // POST
 
         onSuccess { principal ->
             call.respondRedirect("/dashboard")
@@ -361,16 +372,18 @@ provider("google") {
 
 ## Step 5 — Token Refresh (Opt-in)
 
-When `refreshUri` is configured, the plugin installs a route that exchanges the
-stored refresh token for new tokens and updates the session. No custom code
-needed — the plugin handles the grant, validates the new tokens, and updates the
-session cookie.
+When `refreshUri` is configured, the plugin installs a **POST** route that
+exchanges the stored refresh token for new tokens and updates the session.
+No custom code needed — the plugin handles the grant, validates the new tokens,
+and updates the session cookie.
 
 ## Step 6 — Logout
 
-When `logoutUri` is configured, the plugin installs a route that clears the
-local session and, if the provider's discovery document includes an
-`end_session_endpoint`, redirects the user to the provider's logout page.
+When `logoutUri` is configured, the plugin installs a **POST** route that clears
+the local session and, if the provider's discovery document includes an
+`end_session_endpoint`, redirects the user to the provider's logout page. POST
+is required because logout is a state-changing operation; combined with
+`SameSite=Lax` and origin validation, this prevents cross-site logout attacks.
 
 ## Protect Routes
 
@@ -393,13 +406,16 @@ fun Application.module() {
 - ID token validation (signature, nonce, issuer, audience)
 - Session infrastructure hookup and cookie management
 - Default lifecycle behavior for login, callback, refresh, and logout routes
-- State parameter generation and verification (CSRF protection)
+- State parameter generation and verification
+- CSRF protection via origin header validation when sessions are enabled
+- Refresh and logout routes are POST-only by default
 
 ### User-Defined
 
 - Client credentials and scopes
 - Route paths (or use defaults)
-- Session cookie policy
+- Session and cookie policy
+- CSRF protection strategy (default: `originMatchesHost()`)
 - Success/failure callback business logic
 - Whether refresh and logout routes are installed
 
@@ -595,19 +611,20 @@ as usual.
 
 - Discovery workflow and automatic JWKS resolution
 - Provider and session orchestration at startup
-- OAuth route wiring (login, callback, refresh, logout)
+- OAuth route wiring (login and callback as GET; refresh and logout as POST)
 - ID token and access token validation (signature, claims)
-- State/nonce generation and verification (CSRF protection)
+- State/nonce generation and verification for the OAuth flow
+- CSRF protection
 - Protected resource metadata endpoint (RFC 9728)
 - Authentication evaluation order in hybrid (bearer + session) mode
-- Secure session cookie defaults
+- Secure session cookie defaults (`Secure`, `HttpOnly`, `SameSite=Lax`)
 
 ## User-Defined
 
 - Provider configuration (issuer, audience, client credentials)
 - Endpoint paths (or use default `/oidc/{provider}/{action}` pattern)
 - Scopes and resource indicators
-- Session cookie policy overrides
+- Session and cookie policy overrides
 - Principal mapping via `transformPrincipal`
 - Callback business logic (`onSuccess`, `onFailure`)
 - Route-level authentication policy
@@ -619,8 +636,9 @@ as usual.
    exchange, and ID token validation are handled by the plugin. A minimal
    resource server requires only issuer and audience.
 2. **Consistent baseline for secure session/callback configuration.** Session
-   cookies default to `Secure`, `HttpOnly`, `SameSite=Lax`. State and nonce
-   parameters are managed automatically.
+   cookies default to `Secure`, `HttpOnly`, `SameSite=Lax`. CSRF protection
+   via origin validation is enabled by default when sessions are configured.
+   State and nonce parameters are managed automatically.
 3. **Clear extension points for app-specific behavior.** Principal mapping,
    callbacks, session policy, and route paths are all customizable without
    forking the flow.
@@ -663,6 +681,10 @@ as usual.
 5. **Discovery refresh failure.** What happens when periodic discovery refresh
    fails after a successful startup — graceful degradation with stale cached
    data (current design), or propagate the error to incoming requests?
+6. **CSRF protection strategies.** Should `csrfProtection` support additional
+   strategies beyond `originMatchesHost()` — for example, a double-submit
+   cookie for clients that cannot rely on the `Origin` header?
+7. **How to apply CSRF?** Should we check it inside of `jwt.verify`(preffered) or traverse the routing tree before the application starts and apply the CSRF plugin whenever `authenticate("google")` is used?
 
 # Future Directions
 
