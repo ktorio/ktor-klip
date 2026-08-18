@@ -14,10 +14,11 @@
 3. [Current Solutions](#current-solutions)
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
-6. [Drawbacks](#drawbacks)
-7. [Advantages](#advantages)
-8. [Open Questions](#open-questions)
-9. [Future Directions](#future-directions)
+6. [Technical Details](#technical-details)
+7. [Drawbacks](#drawbacks)
+8. [Advantages](#advantages)
+9. [Open Questions](#open-questions)
+10. [Future Directions](#future-directions)
 
 <hr />
 
@@ -25,6 +26,8 @@
 [summary]: #summary
 
 Provide an abstract of the change. Describe the intention and expected impact briefly. Keep it to one paragraph for clarity.
+
+All other sections are optional.  Remove and add as you see fit.
 
 # Motivation
 [motivation]: #motivation
