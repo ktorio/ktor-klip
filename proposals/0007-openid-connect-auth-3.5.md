@@ -1,8 +1,8 @@
 |             |                                                                     |
-| ----------- | ------------------------------------------------------------------- |
+|-------------|---------------------------------------------------------------------|
 | Feature     | OpenID Connect Plugin for Ktor                                      |
 | Submitted   | 2026-03-23                                                          |
-| Accepted    | No                                                                  |
+| Accepted    | Yes                                                                 |
 | Issue       | https://youtrack.jetbrains.com/issue/KTOR-9266/Improve-Auth-in-Ktor |
 | Preceded by | [0006-auth-3.5](0006-auth-3.5.md)                                   |
 | Followed by |                                                                     |
@@ -19,42 +19,42 @@
 8. [Protected Resource Metadata and Resource Indicators](#protected-resource-metadata-and-resource-indicators)
 9. [Technical Details](#technical-details)
 10. [Typesafe Auth Integration (KLIP 0006)](#typesafe-auth-integration-klip-0006)
-11. [Ktor-Defined vs User-Defined](#ktor-defined-vs-user-defined)
-12. [Advantages](#advantages)
-13. [Drawbacks](#drawbacks)
-14. [Open Questions](#open-questions)
-15. [Future Directions](#future-directions)
+11. [Rejected Alternatives](#rejected-alternatives)
+12. [Ktor-Defined vs User-Defined](#ktor-defined-vs-user-defined)
+13. [Advantages](#advantages)
+14. [Drawbacks](#drawbacks)
+15. [Open Questions](#open-questions)
+16. [Future Directions](#future-directions)
 
 <hr />
 
 # Summary
 
-OpenID Connect support is added through `install(OpenIdConnect) { }` in a new
-`ktor-server-auth-openid` module. The plugin handles discovery, JWT validation,
-OAuth login flows, session management, and protected resource metadata — giving
-developers a single entry point for OIDC instead of manual wiring across
-multiple Ktor modules.
+OpenID Connect support is added through `install(Oidc)` in a new `ktor-server-auth-oidc` module. The plugin handles
+discovery, JWT and introspection Bearer authentication, OAuth authorization-code login with PKCE, session management,
+and protected resource metadata — a single entry point instead of manual wiring across multiple Ktor modules.
+
+Providers are registered with the suspend `identityProvider` call. That returns typed schemes from
+[KLIP 0006](0006-auth-3.5.md) (`jwtBearer`, `introspectionBearer`, `session`) for use with `authenticateWith`. Map token
+principals to application types with `mapPrincipal`.
 
 # Motivation
 
-1. **OIDC wiring is repetitive and error-prone.** Every project that integrates
-   with an OpenID provider must fetch discovery documents, resolve JWK endpoints,
-   configure JWT validation, and wire up OAuth callbacks. This boilerplate is
-   duplicated across teams and easy to get wrong.
-2. **Callback and session flows are re-implemented from scratch.** Login,
-   redirect, token refresh, and logout follow well-defined patterns, yet every
-   project builds its own routing and session plumbing.
-3. **No standard way to advertise resource metadata.** With MCP and machine-to-
-   machine OAuth becoming common, servers need to publish what authorization
-   servers they trust (RFC 9728) and clients need to request properly-scoped
-   tokens (RFC 8707). Ktor provides no built-in support for either.
+1. **OIDC wiring is repetitive and error-prone.** Every project that integrates with an OpenID provider must fetch
+   discovery documents, resolve JWK endpoints, configure JWT validation, and wire up OAuth callbacks. This boilerplate
+   is duplicated across teams and easy to get wrong.
+2. **Callback and session flows are re-implemented from scratch.** Login, redirect, token refresh, and logout follow
+   well-defined patterns, yet every project builds its own routing and session plumbing.
+3. **No standard way to advertise resource metadata.** With MCP and machine-to- machine OAuth becoming common, servers
+   need to publish what authorization servers they trust (RFC 9728) and clients need to request properly-scoped tokens
+   (RFC 8707). Ktor provides no built-in support for either.
 
 # The Problem Today
 
 ### Manual Discovery and JWK Setup
 
-Setting up a resource server requires fetching the discovery document, extracting
-the `jwks_uri`, configuring the JWT verifier, and wiring it into the
+Setting up a resource server requires fetching the discovery document, extracting the `jwks_uri`, configuring the JWT
+verifier, and wiring it into the
 `Authentication` plugin — all by hand:
 
 ```kotlin
@@ -71,14 +71,13 @@ install(Authentication) {
 }
 ```
 
-If discovery changes (key rotation, new endpoints), the application must handle
-refresh logic manually or restart.
+If discovery changes (key rotation, new endpoints), the application must handle refresh logic manually or restart.
 
 ### Manual OAuth Callback Wiring
 
-Web login requires configuring the OAuth provider, setting up redirect/callback
-routes, handling the token exchange, validating the ID token, creating a session,
-and managing the session cookie — spread across `Authentication`, `Sessions`, and
+Web login requires configuring the OAuth provider, setting up redirect/callback routes, handling the token exchange,
+validating the ID token, creating a session, and managing the session cookie — spread across `Authentication`,
+`Sessions`, and
 `Routing` configuration:
 
 ```kotlin
@@ -113,34 +112,27 @@ routing {
 }
 ```
 
-The developer must know the authorization and token endpoint URLs (or fetch them
-from discovery), handle the state parameter, validate the ID token signature, and
-set up session storage — all of which the plugin should handle.
+The developer must know the authorization and token endpoint URLs (or fetch them from discovery), handle the state
+parameter, validate the ID token signature, and set up session storage — all of which the plugin should handle.
 
 # Packages
 
 ```kotlin
 dependencies {
     // New module — the OpenID Connect plugin.
-    // Provides install(OpenIdConnect), provider DSL, discovery, OAuth flow routes,
-    // session wiring, and protected resource metadata.
-    implementation("io.ktor:ktor-server-auth-openid:$ktorVersion")
-
-    // Existing module — used under the hood for JWT verification.
-    // Pulled in transitively; listed here for clarity.
-    implementation("io.ktor:ktor-server-auth-jwt:$ktorVersion")
-
-    // Existing modules — underlying auth provider primitives and session mechanics.
-    // Also transitive dependencies of ktor-server-auth-openid.
-    implementation("io.ktor:ktor-server-auth:$ktorVersion")
-    implementation("io.ktor:ktor-server-sessions:$ktorVersion")
+    // Provides install(Oidc), identityProvider, discovery, OAuth login/callback,
+    // session wiring, Bearer schemes, and protected resource metadata.
+    implementation("io.ktor:ktor-server-auth-oidc:$ktorVersion")
 }
 ```
 
+`authenticateWith` is `@ExperimentalKtorApi` and uses Kotlin context parameters. Opt in when protecting OIDC routes with
+typed schemes.
+
 # User Journey: Resource Server
 
-This track is for API-only applications that validate incoming JWTs issued by an
-OpenID provider. No login UI, no sessions — just token verification.
+This track is for API-only applications that validate incoming JWTs issued by an OpenID provider. No login UI, no
+sessions — just token verification.
 
 ```mermaid
 sequenceDiagram
@@ -148,340 +140,383 @@ sequenceDiagram
     participant Ktor
     participant DiscoveryCache as Discovery Cache
     participant IDP as Identity Provider
-
-    Note over Ktor,IDP: Startup (once)
-    Ktor->>IDP: GET /.well-known/openid-configuration
-    IDP-->>Ktor: Discovery document (jwks_uri, issuer, ...)
-    Ktor->>IDP: GET /jwks (from jwks_uri)
-    IDP-->>Ktor: JSON Web Key Set
-    Ktor->>DiscoveryCache: Cache keys + metadata
-
-    Note over Client,IDP: Per request
-    Client->>Ktor: GET /me (Authorization: Bearer <JWT>)
-    Ktor->>DiscoveryCache: Resolve signing keys
-    DiscoveryCache-->>Ktor: Cached JWKS
-    Ktor->>Ktor: Validate signature, issuer, audience, expiry
-    Ktor-->>Client: 200 OK (principal data)
+    Note over Ktor, IDP: identityProvider registration
+    Ktor ->> IDP: GET /.well-known/openid-configuration
+    IDP -->> Ktor: Discovery document (jwks_uri, issuer, ...)
+    Ktor ->> IDP: GET /jwks (from jwks_uri)
+    IDP -->> Ktor: JSON Web Key Set
+    Ktor ->> DiscoveryCache: Cache keys + metadata
+    Note over Client, IDP: Per request
+    Client ->> Ktor: GET /me (Authorization: Bearer <JWT>)
+    Ktor ->> DiscoveryCache: Resolve signing keys
+    DiscoveryCache -->> Ktor: Cached JWKS
+    Ktor ->> Ktor: Validate signature, issuer, audience, expiry
+    Ktor -->> Client: 200 OK (principal data)
 ```
 
 ## Step 1 — Add Dependencies
 
 ```kotlin
 dependencies {
-    implementation("io.ktor:ktor-server-auth-openid:$ktorVersion")
+    implementation("io.ktor:ktor-server-auth-oidc:$ktorVersion")
 }
 ```
 
-## Step 2 — Configure the Provider
+## Step 2 — Register the Identity Provider
 
-Provide the issuer and audience. The plugin fetches the discovery document and
-resolves `jwks_uri` automatically:
+`identityProvider` is suspend because it performs initial discovery. Call it from a suspend application module. Provide
+the issuer and at least one Bearer audience. The plugin fetches the discovery document and resolves `jwks_uri`
+automatically:
 
 ```kotlin
-fun Application.security() {
-    install(OpenIdConnect) {
-        provider("google") {
-            issuer = "https://accounts.google.com"
-            audiences = listOf("my-app-client-id")
+suspend fun Application.security() {
+    val oidc = install(Oidc)
+
+    val google = oidc.identityProvider("google") {
+        issuer = "https://accounts.google.com"
+        bearer {
+            audience = setOf("my-app-client-id")
         }
     }
 }
 ```
 
+Optional JWT config live in `jwt { }` (clock skew, allowed algorithms, JWK cache/rate-limit). They are
+shared by ID-token and JWT access-token validation.
+
 ## Step 3 — Protect Routes
 
-Use the provider name in `authenticate(...)` to guard routes:
+`jwtBearer` is a typed scheme whose principal is `OidcToken.Access`. Use `authenticateWith` (KLIP 0006). Map to an
+application principal when you do not want to expose token material on the route:
 
 ```kotlin
-fun Application.module() {
+data class AppUser(val id: String)
+
+suspend fun Application.module() {
+    val oidc = install(Oidc)
+    val google = oidc.identityProvider("google") {
+        issuer = "https://accounts.google.com"
+        bearer {
+            audience = setOf("my-app-client-id")
+        }
+    }
+    val apiUser = google.jwtBearer.mapPrincipal { token ->
+        val id = token.claims.subject ?: return@mapPrincipal null
+        AppUser(id)
+    }
+
     routing {
-        authenticate("google") {
+        authenticateWith(apiUser) {
             get("/me") {
-                val principal = call.principal<OpenIdConnectPrincipal.AccessToken>()!!
-                call.respond(principal.userInfo?.subject)
+                val user = call.principal
+                call.respond(user.id)
             }
         }
     }
 }
 ```
 
+Without `mapPrincipal`, `call.principal` is `OidcToken.Access` (`value`, `claims`, optional `userInfo`).
+
+### Opaque tokens — `introspectionBearer`
+
+Nested `introspection { }` enables a second scheme that sends any presented access token to RFC 7662, whether
+JWT-formatted or opaque:
+
+```kotlin
+val google = oidc.identityProvider("google") {
+    issuer = "https://accounts.google.com"
+    bearer {
+        audience = setOf("my-api")
+        introspection {
+            endpoint = "https://accounts.google.com/oauth/introspect"
+            clientId = "api-client"
+            clientSecret = "..."
+        }
+    }
+}
+
+routing {
+    authenticateWith(google.introspectionBearer) {
+        get("/api/opaque") { 
+            val token = call.principal // OidcToken.Introspected
+            val introspection = token.introspection // TokenIntrospection
+            call.respond("Hello ${introspection.username ?: "Unknown"}!")
+        }
+    }
+}
+```
+
+JWT Bearer and introspection Bearer are independent schemes. Protect each route with the one you need.
+
 ### Ktor-Defined
 
-- Discovery document fetch and `jwks_uri` resolution at startup
-- JWT provider registration in the `Authentication` plugin
-- Automatic key refresh on the configured `discoveryRefreshInterval`
-- Startup failure when required discovery cannot be completed
+- Discovery document fetch and `jwks_uri` resolution during `identityProvider` registration
+- Typed `jwtBearer` / `introspectionBearer` schemes
+- Periodic metadata refresh on `discoveryRefreshInterval`
+- Registration failure (`OpenIdDiscoveryException`) when initial discovery cannot complete
 
 ### User-Defined
 
-- Issuer URL and audience
-- Provider name (used in `authenticate(...)`)
-- Principal mapping and validation logic
-- Route-level authentication policy
+- Issuer URL and Bearer audience
+- Provider name (used in generated scheme names and default routes)
+- Principal mapping via `mapPrincipal`
+- Optional custom `tokenExtractor` (default: `Authorization: Bearer`)
+- Route-level authentication policy (`authenticateWith`)
 
 # User Journey: Web Login
 
-This track is for web applications that need a full OAuth2/OIDC login flow with
-user-facing consent, session cookies, token refresh, and logout.
+This track is for web applications that need a full OAuth 2.0 / OIDC login flow with user-facing consent, session
+cookies, token refresh, and logout.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant Ktor
     participant IDP as Identity Provider
-
-    User->>Ktor: GET /oidc/google/login
-    Ktor->>User: 302 Redirect to IDP authorize endpoint
-    Note right of Ktor: state, nonce, scopes, redirect_uri
-    User->>IDP: Authenticate + consent
-    IDP->>Ktor: GET /oidc/google/callback?code=...&state=...
-    Ktor->>IDP: POST /token (exchange code for tokens)
-    IDP-->>Ktor: id_token + access_token + refresh_token
-    Ktor->>Ktor: Validate ID token (signature, nonce, issuer, audience)
-    Ktor->>Ktor: Build OpenIdConnectPrincipal.IdToken
-    Ktor->>User: Set session cookie + 302 to /dashboard
-
-    Note over User,IDP: Subsequent requests
-    User->>Ktor: GET /dashboard (with session cookie)
-    Ktor->>Ktor: Resolve principal from session
-    Ktor-->>User: 200 OK
-
-    Note over User,IDP: Token refresh (opt-in, POST)
-    User->>Ktor: POST /oidc/google/refresh
-    Ktor->>IDP: POST /token (grant_type=refresh_token)
-    IDP-->>Ktor: New tokens
-    Ktor->>User: Updated session cookie
-
-    Note over User,IDP: Logout (POST)
-    User->>Ktor: POST /oidc/google/logout
-    Ktor->>Ktor: Clear session
-    Ktor->>User: 302 to IDP end_session_endpoint (if available)
+    User ->> Ktor: GET /oidc/google/login
+    Ktor ->> User: 302 Redirect to IDP authorize endpoint
+    Note right of Ktor: state, nonce, PKCE, scopes, redirect_uri
+    User ->> IDP: Authenticate + consent
+    IDP ->> Ktor: GET /oidc/google/callback?code=...&state=...
+    Ktor ->> IDP: POST /token (exchange code for tokens)
+    IDP -->> Ktor: id_token + access_token + refresh_token
+    Ktor ->> Ktor: Validate ID token (signature, nonce, issuer, audience)
+    Ktor ->> Ktor: Build OidcToken.Id
+    Ktor ->> User: Set session cookie + 302 to /dashboard
+    Note over User, IDP: Subsequent requests
+    User ->> Ktor: GET /dashboard (with session cookie)
+    Ktor ->> Ktor: Resolve principal from session
+    Ktor -->> User: 200 OK
+    Note over User, IDP: Token refresh (opt-in, POST)
+    User ->> Ktor: POST /oidc/google/refresh
+    Ktor ->> IDP: POST /token (grant_type=refresh_token)
+    IDP -->> Ktor: New tokens
+    Ktor ->> User: Updated session cookie
+    Note over User, IDP: Logout (POST)
+    User ->> Ktor: POST /oidc/google/logout
+    Ktor ->> Ktor: Clear session
+    Ktor ->> User: 302 to IDP end_session_endpoint (if available)
 ```
 
-## Step 1 — Configure the Provider
+## Step 1 — Configure OAuth on the Provider
 
-Provide issuer, client credentials, and scopes. The plugin resolves all
-endpoints from the discovery document:
+Provide issuer and OAuth client credentials. Endpoints come from discovery. Login and callback routes are always
+installed with `oauth { }` (defaults `/oidc/{name}/login` and `/oidc/{name}/callback`). Browser sessions are **enabled
+by default**; customize with `sessions { }` or opt out with
+`disableSessions()`.
+
+PKCE uses `S256` by default. Set `codeChallengeMethod = null` only for legacy providers that reject PKCE. The `openid`
+scope is required. The callback requires an ID token.
 
 ```kotlin
-fun Application.security() {
-    install(OpenIdConnect) {
+suspend fun Application.security() {
+    val oidc = install(Oidc) {
         httpClient = myHttpClient                  // optional: shared HTTP client
         discoveryRefreshInterval = 15.minutes      // optional: set to ZERO to disable
+    }
 
-        provider("google") {
-            issuer = "https://accounts.google.com"
+    val google = oidc.identityProvider("google") {
+        issuer = "https://accounts.google.com"
+        oauth {
             clientId = System.getenv("GOOGLE_CLIENT_ID")
             clientSecret = System.getenv("GOOGLE_CLIENT_SECRET")
-        }
-    }
-}
-```
+            scopes = listOf("openid", "profile", "email")
 
-## Step 2 — Configure JWK Verification (Optional)
-
-When protecting API routes in the same application (hybrid mode), configure JWT
-verification within the provider:
-
-```kotlin
-provider("google") {
-    issuer = "https://accounts.google.com"
-    clientId = System.getenv("GOOGLE_CLIENT_ID")
-    clientSecret = System.getenv("GOOGLE_CLIENT_SECRET")
-
-    jwk {
-        audiences = setOf("my-api")
-        clockSkewSeconds = 60
-
-        transformPrincipal = { call, principal ->
-            when (principal) {
-                is OpenIdConnectPrincipal.IdToken -> MyUser(principal.userInfo.subject)
-                is OpenIdConnectPrincipal.AccessToken -> MyUser(principal.userInfo?.subject ?: "unknown")
-                is OpenIdConnectPrincipal.OpaqueToken -> fetchMyUserByToken(principal.token)
+            onAuthenticated { token ->
+                call.respondRedirect("/dashboard")
             }
         }
-
-        tokenSources = {
-            authorizationHeader() // default
-            session()
-            custom { call -> call.request.cookies["MY_TOKEN"] }
-        }
     }
 }
 ```
 
-## Step 3 — Configure Sessions
+## Step 2 — Customize Sessions (Optional)
 
-Sessions are not enabled by default. Add a `sessions { }` block to opt in.
-When sessions are enabled, CSRF protection via `originMatchesHost()` is active
-by default — the plugin verifies the `Origin` header matches the server's host
-on state-changing requests (POST), blocking cross-origin form submissions and
-fetch calls.
+When `oauth { }` is configured and `disableSessions()` is not called, sessions are on. The default cookie name is
+`{NAME}_SESSION` (provider name uppercased). Secure defaults are `httpOnly`, `secure`
+in production, and `SameSite=lax`. CSRF protection uses `originMatchesHost()` by default.
 
 ```kotlin
-provider("google") {
-    // ...credentials from Step 1...
+oauth {
+    clientId = System.getenv("GOOGLE_CLIENT_ID")
+    clientSecret = System.getenv("GOOGLE_CLIENT_SECRET")
 
     sessions {
         name = "GOOGLE_SESSION"
         cookie {
             cookie.secure = true
-            cookie.httpOnly = true
-            cookie.extensions["SameSite"] = "lax"
         }
         csrfProtection {
             originMatchesHost()
         }
+        // tokenRefreshStrategy = OidcTokenRefreshStrategy.Auto(beforeExpiry = 30.seconds)
     }
 }
 ```
 
-## Step 4 — Configure the OAuth Flow
+Call `disableCsrfProtection()` to turn CSRF off. CSRF applies to plugin-managed POST routes (refresh, logout) and to
+non-safe methods under `authenticateWith(provider.session)`.
 
-Define scopes, route paths, and success/failure callbacks. Routes follow the
-pattern `/oidc/{providerName}/{action}` by default. Login and callback are GET
-routes; refresh and logout are **POST routes** protected by the session's CSRF
-origin check:
+`disableSessions()` selects callback-only handling. Plugin-managed `logout { }` / `refresh { }` then cannot be used, and
+`onAuthenticated { }` is required, so verified token material is not discarded.
+
+## Step 3 — Optional Login Paths, Refresh, and Logout
+
+Override `loginUri` / `redirectUri` when the default `/oidc/{name}/...` paths do not fit.
+`logout { }` and `refresh { }` are **opt-in**. Calling them without a path uses
+`POST /oidc/{name}/logout` and `POST /oidc/{name}/refresh`. Both require sessions.
 
 ```kotlin
-provider("google") {
-    // ...credentials and session from above...
+oauth {
+    clientId = System.getenv("GOOGLE_CLIENT_ID")
+    clientSecret = System.getenv("GOOGLE_CLIENT_SECRET")
+    resourceIndicators = listOf("https://api.example.com")
 
-    oauth {
-        scopes = listOf("openid", "profile", "email")
+    loginUri = { path("oidc", "google", "login") }
+    redirectUri = { path("oidc", "google", "callback") }
 
-        // Resource indicators (RFC 8707) for multi-audience tokens.
-        resourceIndicators = listOf("https://api.example.com")
-
-        // Default pattern: /oidc/{providerName}/{action} — set null to disable.
-        loginUri = { path("oidc", "google", "login") }       // GET
-        redirectUri = { path("oidc", "google", "callback") }  // GET
-        logoutUri = { path("oidc", "google", "logout") }      // POST
-        refreshUri = { path("oidc", "google", "refresh") }    // POST
-
-        onSuccess { principal ->
-            call.respondRedirect("/dashboard")
-        }
-
-        onFailure {
-            call.respond(HttpStatusCode.Unauthorized)
-        }
+    onAuthenticated { token ->
+        call.respondRedirect("/dashboard")
     }
+    onAuthenticationFailed {
+        call.respond(HttpStatusCode.Unauthorized)
+    }
+
+    refresh { /* POST /oidc/google/refresh */ }
+    logout(
+        postLogoutRedirectUri = { path("logged-out") },
+    )
 }
 ```
 
-## Step 5 — Token Refresh (Opt-in)
+Refresh exchanges the stored refresh token, validates new tokens, and updates the session cookie. Logout clears the
+local session and, when discovery includes `end_session_endpoint`, redirects to the provider. POST plus `SameSite=Lax`
+and origin validation prevent cross-site logout.
 
-When `refreshUri` is configured, the plugin installs a **POST** route that
-exchanges the stored refresh token for new tokens and updates the session.
-No custom code needed — the plugin handles the grant, validates the new tokens,
-and updates the session cookie.
-
-## Step 6 — Logout
-
-When `logoutUri` is configured, the plugin installs a **POST** route that clears
-the local session and, if the provider's discovery document includes an
-`end_session_endpoint`, redirects the user to the provider's logout page. POST
-is required because logout is a state-changing operation; combined with
-`SameSite=Lax` and origin validation, this prevents cross-site logout attacks.
+Automatic per-request session refresh is a separate `sessions { tokenRefreshStrategy }` setting (`Disabled` by default;
+expired ID-token sessions are still rejected on user routes).
 
 ## Protect Routes
 
+`session` is a typed session scheme whose principal (and session value) is `OidcToken.Id`:
+
 ```kotlin
-fun Application.module() {
+data class AppUser(val id: String)
+
+suspend fun Application.module() {
+    val oidc = install(Oidc)
+    val google = oidc.identityProvider("google") {
+        issuer = "https://accounts.google.com"
+        oauth {
+            clientId = System.getenv("GOOGLE_CLIENT_ID")
+            clientSecret = System.getenv("GOOGLE_CLIENT_SECRET")
+            onAuthenticated { call.respondRedirect("/dashboard") }
+        }
+    }
+    val userSession = google.session.mapPrincipal { token ->
+        AppUser(id = token.userInfo.subject)
+    }
+
     routing {
-        authenticate("google") {
+        authenticateWith(userSession) {
             get("/me") {
-                val user = call.principal<OpenIdConnectPrincipal.IdToken>()!!
-                call.respond(user.userInfo)
+                val user = call.principal
+                call.respond(user.id)
             }
         }
     }
 }
 ```
 
+Without `mapPrincipal`, `call.principal` and `call.session` are `OidcToken.Id`. Mapping runs when a derived scheme
+authenticates a route, never during the OAuth callback.
+
+The same `identityProvider` can also configure `bearer { }` for API routes (`jwtBearer` /
+`introspectionBearer`) alongside web login.
+
 ### Ktor-Defined
 
-- OAuth callback wiring and authorization code exchange
-- ID token validation (signature, nonce, issuer, audience)
-- Session infrastructure hookup and cookie management
-- Default lifecycle behavior for login, callback, refresh, and logout routes
-- State parameter generation and verification
-- CSRF protection via origin header validation when sessions are enabled
-- Refresh and logout routes are POST-only by default
+- OAuth callback wiring and authorization code exchange (KLIP 0006 `oauth2` / `oauth2Session`)
+- ID token validation (signature, nonce, issuer, audience = OAuth `clientId`)
+- PKCE `S256` unless disabled
+- Session cookie defaults and CSRF `originMatchesHost()` when sessions are enabled
+- Encrypted OAuth state cookie (`state`, `nonce`, PKCE verifier)
+- Login and callback GET routes; opt-in refresh and logout POST routes
 
 ### User-Defined
 
-- Client credentials and scopes
-- Route paths (or use defaults)
-- Session and cookie policy
-- CSRF protection strategy (default: `originMatchesHost()`)
-- Success/failure callback business logic
-- Whether refresh and logout routes are installed
+- Client credentials and scopes (`openid` required)
+- Route paths (or use `/oidc/{provider}/{action}` defaults)
+- Session and cookie policy; CSRF strategy or `disableCsrfProtection()`
+- `onAuthenticated` / `onAuthenticationFailed` business logic
+- Whether `refresh { }` / `logout { }` are installed
+- Optional `fetchUserInfo`, `resourceIndicators`, `stateEncryptionKey`
 
 # Configuration (HOCON)
 
-Providers can be loaded from `application.conf` (or equivalent) instead of — or
-in addition to — the Kotlin DSL:
+Provider values can be stored in `application.conf` (or equivalent) and applied **explicitly** with
+`OidcEnvConfig`. The plugin does **not** merge HOCON into the DSL:
 
 ```hocon
-ktor.openid.google {
+ktor.oidc.google {
     issuer = "https://accounts.google.com"
     clientId = ${GOOGLE_CLIENT_ID}
     clientSecret = ${GOOGLE_CLIENT_SECRET}
     scopes = ["openid", "profile", "email"]
 }
+```
 
-ktor.openid.github {
-    issuer = "https://github.com"
-    clientId = ${GITHUB_CLIENT_ID}
-    clientSecret = ${GITHUB_CLIENT_SECRET}
-    scopes = ["read:user", "user:email"]
+```kotlin
+val env = environment.config
+    .property("ktor.oidc.google")
+    .getAs<OidcEnvConfig>()
+
+val oidc = install(Oidc)
+val google = oidc.identityProvider("google") {
+    issuer = env.issuer
+    bearer {
+        audience = setOf("api")
+    }
+    oauth {
+        clientId = env.clientId
+        clientSecret = env.clientSecret
+        scopes = env.scopes // must include openid; assigning replaces the OAuth default list
+    }
 }
 ```
 
-Values from HOCON are merged with the DSL configuration, allowing secrets to
-live in environment variables while structural settings stay in code.
-
 # Protected Resource Metadata and Resource Indicators
 
-This section covers two complementary RFCs that enable machine-to-machine OAuth
-and are essential for protocols like MCP (Model Context Protocol).
+This section covers two complementary RFCs that enable machine-to-machine OAuth and are essential for protocols like MCP
+(Model Context Protocol).
 
 ## RFC 9728 — Protected Resource Metadata
 
-[RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) defines a standard way for a
-resource server to advertise its authorization requirements. The server publishes
-a JSON document at `/.well-known/oauth-protected-resource` describing which
-authorization servers it trusts, what scopes it supports, and what bearer methods
-it accepts.
+[RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) defines a standard way for a resource server to advertise its
+authorization requirements. The server publishes a JSON document at `/.well-known/oauth-protected-resource` describing
+which authorization servers it trusts, what scopes it supports, and what bearer methods it accepts.
 
-The plugin serves this metadata automatically when `protectedResource` is
-configured:
+The plugin serves this metadata when `protectedResource` is configured. The resource identifier is the function
+argument:
 
 ```kotlin
-install(OpenIdConnect) {
-    provider("google") { /* ... */ }
-
-    protectedResource {
-        resource = "https://api.example.com"
+val oidc = install(Oidc) {
+    protectedResource("https://api.example.com") {
         resourceName = "My API"
-        // Auto-derived from configured providers when null:
+        // Auto-derived from providers configured with bearer { } when null:
         //   authorizationServers, scopesSupported, bearerMethodsSupported
     }
 }
 ```
 
-This produces a `/.well-known/oauth-protected-resource` endpoint and adds
-`resource_metadata` to `WWW-Authenticate` headers on 401 responses, allowing
-clients to discover authentication requirements dynamically.
+This produces a `/.well-known/oauth-protected-resource` endpoint and adds `resource_metadata` to
+`WWW-Authenticate` headers on Bearer authentication failures.
 
 ## RFC 8707 — Resource Indicators
 
-[RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) allows OAuth clients to
-specify *which resource* they need an access token for when requesting
-authorization. This is the `resource` parameter in the authorization and token
-requests.
+[RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) allows OAuth clients to specify *which resource* they need an access
+token for when requesting authorization. This is the `resource` parameter in the authorization and token requests.
 
 In the plugin, resource indicators are configured per-provider in the OAuth flow:
 
@@ -494,237 +529,235 @@ oauth {
 
 # Technical Details
 
-## Principal Shape
+## Token Shape
+
+Route-facing schemes expose precise `OidcToken` subtypes. Constructors for token-bearing subclasses are internal so
+applications cannot fabricate a verified principal.
 
 ```kotlin
-abstract class OpenIdConnectPrincipal {
-    abstract val refreshToken: String?
-
+interface OidcToken {
     @Serializable
-    class IdToken(
-        public val idToken: String,
-        public val accessToken: String? = null,
-        override val refreshToken: String? = null,
-        public val userInfo: UserInfo,
-    ) : OpenIdConnectPrincipal() {
-        public val idTokenClaims: TokenClaims
-        public val accessTokenClaims: TokenClaims?
+    class Id(
+        val value: String,          // verified ID token
+        val accessToken: String,    // accompanying access token; not a Bearer principal
+        val refreshToken: String? = null,
+        val userInfo: UserInfo,
+    ) : OidcToken {
+        val claims: TokenClaims     // decoded from value; access does not re-verify
     }
 
     @Serializable
-    public class AccessToken(
-        public val accessToken: String,
-        public val userInfo: UserInfo? = null,
-        override val refreshToken: String? = null,
-    ) : OpenIdConnectPrincipal() {
-        public val accessTokenClaims: TokenClaims
+    class Access(
+        val value: String,          // verified JWT access token
+        val userInfo: UserInfo? = null,
+    ) : OidcToken {
+        val claims: TokenClaims
+        val clientId: String?       // azp, else client_id
     }
 
     @Serializable
-    public class OpaqueToken(
-        public val token: String,
-        override val refreshToken: String? = null,
-    ) : OpenIdConnectPrincipal()
+    class Introspected(
+        val value: String,
+        val introspection: TokenIntrospection,
+    ) : OidcToken
 
     @Serializable
-    public class UserInfo(
-        public val subject: String,
-        public val name: String? = null,
-        public val email: String? = null,
-        public val emailVerified: Boolean? = null,
-        public val picture: String? = null,
-        public val givenName: String? = null,
-        public val familyName: String? = null,
-        public val preferredUsername: String? = null,
+    class UserInfo(
+        val subject: String,
+        val name: String? = null,
+        val email: String? = null,
+        val emailVerified: Boolean? = null,
+        val picture: String? = null,
+        val givenName: String? = null,
+        val familyName: String? = null,
+        val preferredUsername: String? = null,
     )
 }
-
-class TokenClaims { ... }
 ```
 
-The principal type depends on the authentication path:
+The principal type depends on the scheme:
 
-- **`IdToken`** — returned from a full OIDC login flow (contains both tokens and
-  verified user info)
-- **`AccessToken`** — returned when validating a JWT Bearer token on a resource
-  server (user info may be absent)
-- **`OpaqueToken`** — returned when the token is not a JWT (requires
-  introspection or external resolution)
+- **`OidcToken.Id`** — OAuth callback and `provider.session`. The accompanying `accessToken` string is not verified as a
+  resource-server Bearer principal; use `jwtBearer` for `OidcToken.Access`.
+- **`OidcToken.Access`** — `provider.jwtBearer` after local JWT verification against `bearer { audience }`.
+- **`OidcToken.Introspected`** — `provider.introspectionBearer` after RFC 7662 (JWT or opaque).
 
 ## Discovery Lifecycle
 
-1. **Startup:** Discovery is launched in `Application.coroutineScope` when the
-   plugin is installed. The application blocks during startup until all providers
-   have completed initial discovery.
-2. **Refresh:** The discovery document and JWKS are re-fetched on the configured
-   `discoveryRefreshInterval` (default: 15 minutes). Set to `Duration.ZERO` to
-   disable periodic refresh.
-3. **HTTP client:** A custom `HttpClient` can be provided for discovery requests
-   (proxy configuration, custom TLS, logging).
-4. **Failure:** If initial discovery fails, the application fails to start. If a
-   refresh fails after startup, the plugin continues with the previously cached
-   data and retries on the next interval.
+1. **Registration:** Initial discovery runs inside suspend `identityProvider`. It blocks that call until metadata is
+   loaded or `initialDiscoveryAttempts` (default 1) is exhausted, then fails with
+   `OpenIdDiscoveryException`. Retry delay is `initialDiscoveryRetryDelay` (default 5 seconds). Discovery work runs on
+   `Dispatchers.IO`.
+2. **Refresh:** After success, metadata is re-fetched on `discoveryRefreshInterval` (default 15 minutes)
+   unless static `metadata` is set or the interval is `Duration.ZERO`. Failed refreshes keep the last successful
+   document, emit `OidcMetadataRefreshFailed`, and retry after `discoveryRefreshFailureDelay`
+   (default 1 minute).
+3. **HTTP client:** A custom `HttpClient` can be provided on `install(Oidc)` for discovery and userinfo (proxy, TLS,
+   logging). Otherwise, the plugin installs an internal client and closes it on
+   `ApplicationStopped`.
+4. **Static metadata / tests:** Set `metadata = OpenIdProviderMetadata(...)` to skip discovery and periodic refresh.
+   `jwt(OpenIdTestKeys)` verifies signatures against in-memory keys.
+
+Provider names must match `[a-z0-9]+(?:-[a-z0-9]+)*`. Duplicate names or issuers fail registration.
 
 ## Module Ownership
 
-- **`ktor-server-auth-openid`** — plugin DSL, discovery, provider/session
-  orchestration, OAuth flow route wiring, protected resource metadata
-- **`ktor-server-auth`** — underlying auth provider primitives (used by plugin
-  wiring)
-- **`ktor-server-auth-jwt`** — JWT verification and JWK support (used under the
-  hood)
-- **`ktor-server-sessions`** — session storage and cookie mechanics
+- **`ktor-server-auth-oidc`** — plugin DSL, discovery, provider/session orchestration, OAuth route wiring, Bearer
+  schemes, protected resource metadata
+- **`ktor-server-auth`** — typed `authenticateWith` / `mapPrincipal` (KLIP 0006)
+
+Implicit and Hybrid flows are not supported. Authorization Code with PKCE is the login flow.
 
 # Typesafe Auth Integration (KLIP 0006)
 
-When used alongside `ktor-server-typesafe-auth`
-([KLIP 0006](0006-auth-3.5.md)), the OpenID Connect provider can produce a typed
-`AuthScheme` for use with `authenticateWith(...)`:
+The plugin produces typed schemes on `OidcProvider`. There is no separate `createAuthScheme` step and no
+`ktor-server-typesafe-auth` module:
+
+| Scheme                | Principal                | When available                          |
+|-----------------------|--------------------------|-----------------------------------------|
+| `jwtBearer`           | `OidcToken.Access`       | `bearer { }`                            |
+| `introspectionBearer` | `OidcToken.Introspected` | `bearer { introspection { } }`          |
+| `session`             | `OidcToken.Id`           | `oauth { }` without `disableSessions()` |
 
 ```kotlin
-install(OpenIdConnect) {
-    provider("google") {
-        issuer = "https://accounts.google.com"
-        audience = "my-app-client-id"
-    }
+val google = oidc.identityProvider("google") {
+    issuer = "https://accounts.google.com"
+    bearer { audience = setOf("my-app-client-id") }
 }
 
-val GoogleAuth = createAuthScheme<OpenIdConnectPrincipal.AccessToken>("google")
+val apiUser = google.jwtBearer.mapPrincipal { token ->
+    AppUser(id = token.claims.subject ?: return@mapPrincipal null)
+}
 
 routing {
-    authenticateWith(GoogleAuth) {
+    authenticateWith(apiUser) {
         get("/me") {
-            call.respond(principal.userInfo?.subject)
+            call.respond(call.principal.id)
         }
     }
 }
 ```
 
-This gives you compile-time principal safety (non-null, correctly typed) on top
-of the OpenID Connect plugin's discovery and validation infrastructure. Role-
-based and anonymous extensions from KLIP 0006 (`withRoles`, `orAnonymous`) apply
-as usual.
+`withRoles` and `orAnonymous` from KLIP 0006 apply to these schemes as usual. Domain `mapPrincipal`
+runs only when the derived scheme authenticates a protected route, not during the OAuth callback.
+
+# Rejected Alternatives
+
+These were considered in earlier drafts of this KLIP and are **not** part of the implemented API.
+
+**`install(OpenIdConnect) { provider("google") { ... } }`.** Providers are not nested inside plugin install.
+`install(Oidc)` returns a registry; `identityProvider` is a separate suspend call so discovery can complete before the
+typed schemes are used.
+
+**Untyped `authenticate("google")` as the primary route API.** Each capability is its own scheme (`jwtBearer`,
+`introspectionBearer`, `session`) used with `authenticateWith`. A single provider name does not mix Bearer and session
+principals on one route.
+
+**`transformPrincipal` / `tokenSources` on a shared JWK block.** Principal mapping is `mapPrincipal`
+on the scheme that authenticates the route. Bearer token location is `bearer { tokenExtractor }`
+(default `Authorization: Bearer`), not a list of session-plus-header sources on JWT config.
+
+**Sessions opt-in at provider root.** Sessions are nested under `oauth { }` and enabled by default for that flow. Opt
+out with `disableSessions()`.
+
+**Automatic HOCON merge (`ktor.openid.*`).** Environment values are `ktor.oidc.*` via `OidcEnvConfig`, applied
+explicitly in the DSL.
+
+**`OpenIdConnectPrincipal` / `OpaqueToken`.** Token principals are `OidcToken.Id`, `OidcToken.Access`, and
+`OidcToken.Introspected`. Introspection is a distinct scheme, not an opaque variant of a shared principal hierarchy with
+a `refreshToken` on every subtype.
 
 # Ktor-Defined vs User-Defined
 
 ## Ktor-Defined
 
 - Discovery workflow and automatic JWKS resolution
-- Provider and session orchestration at startup
-- OAuth route wiring (login and callback as GET; refresh and logout as POST)
-- ID token and access token validation (signature, claims)
-- State/nonce generation and verification for the OAuth flow
-- CSRF protection
+- Typed schemes on `OidcProvider`
+- OAuth route wiring (login and callback as GET; refresh and logout as POST when opted in)
+- ID token and JWT access token validation (signature, claims)
+- PKCE `S256` unless disabled
+- State/nonce generation and encrypted state cookie
+- CSRF protection on session-authenticated non-safe methods and plugin POST routes
 - Protected resource metadata endpoint (RFC 9728)
-- Authentication evaluation order in hybrid (bearer + session) mode
-- Secure session cookie defaults (`Secure`, `HttpOnly`, `SameSite=Lax`)
+- Secure session cookie defaults (`Secure` in production, `HttpOnly`, `SameSite=Lax`)
 
 ## User-Defined
 
-- Provider configuration (issuer, audience, client credentials)
+- Provider configuration (issuer, Bearer audience, client credentials)
 - Endpoint paths (or use default `/oidc/{provider}/{action}` pattern)
 - Scopes and resource indicators
 - Session and cookie policy overrides
-- Principal mapping via `transformPrincipal`
-- Callback business logic (`onSuccess`, `onFailure`)
-- Route-level authentication policy
+- Principal mapping via `mapPrincipal`
+- Callback business logic (`onAuthenticated`, `onAuthenticationFailed`)
+- Route-level authentication policy (`authenticateWith`)
 - Whether refresh/logout routes are installed
+- HOCON values applied explicitly through `OidcEnvConfig`
 
 # Advantages
 
-1. **Less OIDC/OAuth integration boilerplate.** Discovery, JWK resolution, token
-   exchange, and ID token validation are handled by the plugin. A minimal
-   resource server requires only issuer and audience.
-2. **Consistent baseline for secure session/callback configuration.** Session
-   cookies default to `Secure`, `HttpOnly`, `SameSite=Lax`. CSRF protection
-   via origin validation is enabled by default when sessions are configured.
-   State and nonce parameters are managed automatically.
-3. **Clear extension points for app-specific behavior.** Principal mapping,
-   callbacks, session policy, and route paths are all customizable without
-   forking the flow.
-4. **Standards-compliant resource metadata out of the box.** RFC 9728 and
-   RFC 8707 support enables machine-to-machine OAuth patterns, including MCP
-   server authentication.
-5. **MCP-ready server configuration.** A Ktor server can advertise its
-   authorization requirements to MCP clients with a single `protectedResource`
-   block.
+1. **Less OIDC/OAuth integration boilerplate.** Discovery, JWK resolution, token exchange, and ID token validation are
+   handled by the plugin. A minimal resource server requires only issuer and Bearer audience.
+2. **Consistent baseline for secure session/callback configuration.** Session cookies default to `HttpOnly`, `Secure` in
+   production, `SameSite=Lax`. CSRF protection via origin validation is enabled by default when sessions are on. PKCE,
+   state, and nonce are managed automatically.
+3. **Clear extension points for app-specific behavior.** Principal mapping, callbacks, session policy, and route paths
+   are customizable without forking the flow.
+4. **Standards-compliant resource metadata out of the box.** RFC 9728 and RFC 8707 support enables machine-to-machine
+   OAuth patterns, including MCP server authentication.
+5. **Compile-time principal safety.** Each scheme exposes one `OidcToken` subtype;
+   `mapPrincipal` and `authenticateWith` (KLIP 0006) keep application types non-null on protected routes.
 
 # Drawbacks
 
 1. **Implicit plugin defaults may surprise teams preferring explicit wiring.**
-   Auto-generated routes and session hookup reduce boilerplate but can be opaque
-   to developers expecting full control.
-2. **Hybrid mode can increase operational complexity.** Supporting both bearer
-   tokens and session cookies in the same provider requires understanding token
-   source priority and session lifecycle.
-3. **Provider-specific edge cases still require custom code.** The plugin covers
-   standard OIDC flows; provider quirks (non-standard claims, extra parameters)
-   need `transformPrincipal` or `extraParameters`.
-4. **Dependency on discovery availability at startup.** The application will not
-   start if the identity provider's discovery endpoint is unreachable.
+   Auto-generated login/callback routes and default sessions reduce boilerplate but can be opaque to developers
+   expecting full control.
+2. **Hybrid apps still need two schemes.** Bearer and session on the same issuer are separate `authenticateWith` trees
+   (`jwtBearer` vs `session`), not one provider name with token-source priority.
+3. **Provider-specific edge cases still require custom code.** The plugin covers standard OIDC flows; provider quirks
+   (non-standard claims, extra authorize parameters) need `mapPrincipal` or are not yet expressible in the DSL.
+4. **Discovery availability blocks provider registration.** `identityProvider`
+   fails after exhausted initial attempts if the discovery endpoint is unreachable. The rest of the application can
+   still start; that provider's schemes are not available.
 
 # Open Questions
 
-1. **Auto-generated routes: default or opt-in?** Should login/logout/refresh
-   routes be installed automatically when `oauth { }` is configured, or should
-   each route require explicit opt-in via `loginUri`, `logoutUri`, `refreshUri`?
-2. **Typesafe scheme production.** How should `OpenIdConnect` integrate with
-   KLIP 0006's `AuthScheme<P>` — should installing a provider automatically
-   produce a typed scheme, or should developers create one explicitly via
-   `createAuthScheme<P>(name)`?
-3. **PKCE default behavior.** Should PKCE (Proof Key for Code Exchange) be
-   enabled by default for all OAuth flows, or only when no `clientSecret` is
-   provided (public clients)?
-4. **Provider-specific extensions.** How to handle parameters like Google's `hd`
-   (hosted domain) or Azure's `tenant` — explicit DSL properties per provider,
-   or a generic `extraParameters` map?
-5. **Discovery refresh failure.** What happens when periodic discovery refresh
-   fails after a successful startup — graceful degradation with stale cached
-   data (current design), or propagate the error to incoming requests?
-6. **CSRF protection strategies.** Should `csrfProtection` support additional
-   strategies beyond `originMatchesHost()` — for example, a double-submit
-   cookie for clients that cannot rely on the `Origin` header?
-7. **How to apply CSRF?** Should we check it inside of `jwt.verify`(preffered) or traverse the routing tree before the application starts and apply the CSRF plugin whenever `authenticate("google")` is used?
+1. **Provider-specific extensions.** How to handle parameters like Google's `hd`
+   (hosted domain) or Azure's `tenant` — explicit DSL properties per provider, or a generic `extraParameters` map?
 
 # Future Directions
 
-The following ideas are **not part of this proposal**. They describe possible
-extensions that stay consistent with the plugin's architecture.
+The following ideas are **not part of this proposal**. They describe possible extensions that stay consistent with the
+plugin's architecture.
 
-## 1. PKCE and Additional Grant Types
+## 1. Additional Grant Types
 
-PKCE (RFC 7636) adds code verifier/challenge to the authorization code flow,
-preventing interception attacks. Beyond the authorization code grant, the plugin
-could support device code flow (RFC 8628) for CLI/IoT applications and client
-credentials grant (RFC 6749 Section 4.4) for service-to-service authentication.
+Beyond authorization code, the plugin could support device code flow (RFC 8628)
+for CLI/IoT applications and client credentials grant (RFC 6749 Section 4.4) for service-to-service authentication.
 
 ## 2. Back-Channel Logout
 
 The [OpenID Connect Back-Channel Logout](https://openid.net/specs/openid-connect-backchannel-1_0.html)
-specification enables identity providers to notify resource servers when a user's
-session should be terminated. The plugin could expose a configurable logout
-endpoint that receives and validates logout tokens, then invalidates the
+specification enables identity providers to notify resource servers when a user's session should be terminated. The
+plugin could expose a configurable logout endpoint that receives and validates logout tokens, then invalidates the
 corresponding local session.
 
 ## 3. Dynamic Client Registration (RFC 7591)
 
-[RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) allows OAuth clients to
-register with an authorization server at runtime. This is important for MCP,
-where MCP clients need to register dynamically with authorization servers they
-have not been pre-configured with. The plugin could support both server-side
-(receiving registrations) and client-side (registering with external servers)
+[RFC 7591](https://www.rfc-editor.org/rfc/rfc7591) allows OAuth clients to register with an authorization server at
+runtime. This is important for MCP, where MCP clients need to register dynamically with authorization servers they have
+not been pre-configured with. The plugin could support both server-side (receiving registrations) and client-side
+(registering with external servers)
 flows.
 
 ## 4. DPoP — Demonstrating Proof of Possession (RFC 9449)
 
-[RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) binds access tokens to a
-specific client key pair, preventing token theft and replay. The plugin could
-generate DPoP proofs for outgoing token requests and validate incoming DPoP-bound
+[RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) binds access tokens to a specific client key pair, preventing token
+theft and replay. The plugin could generate DPoP proofs for outgoing token requests and validate incoming DPoP-bound
 tokens on resource server routes.
 
 ## 5. Telemetry and Observability Hooks
 
-Metrics for discovery fetch latency, token exchange success/failure rates, JWT
-validation errors, and session lifecycle events. These could integrate with
-Ktor's existing metrics infrastructure or expose callbacks for custom telemetry
+Metrics for discovery fetch latency, token exchange success/failure rates, JWT validation errors, and session lifecycle
+events. These could integrate with Ktor's existing metrics infrastructure or expose callbacks for custom telemetry
 pipelines.
