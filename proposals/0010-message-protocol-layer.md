@@ -13,6 +13,12 @@
 3. [Current Solutions](#current-solutions)
 4. [Design Overview](#design-overview)
 5. [Design Details](#design-details)
+   1. [Connector implementations](#connector-implementations)
+   2. [Connector algebra](#connector-algebra)
+   3. [Failures and lifecycle management](#failures-and-lifecycle-management)
+      1. [Failure to connect](#failure-to-connect)
+      2. [Connection interruptions](#connection-interruptions)
+      3. [Tracking connection state](#tracking-connection-state)
 6. [Drawbacks](#drawbacks)
 7. [Advantages](#advantages)
 8. [Open Questions](#open-questions)
@@ -146,6 +152,7 @@ In the base case, we roughly mimic the existing WebSockets API:
 
 ```kotlin
 val client = HttpClient()
+
 client.connect(WebSockets, "/messages") {
     for (message in incoming) {
         if (message !is Frame.Text) continue
@@ -233,10 +240,9 @@ Here is a diagram of the core interfaces:
 title: Core interfaces
 ---
 classDiagram
-    class AttributesHolder {
+    class Connection {
         +attributes: Attributes
-    }
-    class AsyncCloseable {
+        +state: StateFlow<ConnectionState>
         +close(throwable: Throwable?)
     }
     class Receiver {
@@ -247,16 +253,14 @@ classDiagram
     }
     class ChannelConnection {}
     class ClientConnector {
-        +connect(context, request): ChannelConnection
+        +connect(context, request): ChannelConnection|ConnectError
     }
     class ServerConnector {
         +install(route, handler)
     }
     
-    Broadcast ..> AsyncCloseable
-    Broadcast ..> AttributesHolder
-    Receiver ..> AsyncCloseable
-    Receiver ..> AttributesHolder
+    Broadcast ..> Connection
+    Receiver ..> Connection
     ChannelConnection ..> Receiver
     ChannelConnection ..> Broadcast
     ClientConnector ..> ChannelConnection: produces
@@ -266,6 +270,7 @@ classDiagram
 And these connection types lead us to the core extension on the `HttpClient`:
 
 ```kotlin
+// With connection scope...
 suspend fun <Out, In> HttpClient.connect(
   connector: ClientConnector<Out, In>,
   request: ConnectRequest,
@@ -273,7 +278,13 @@ suspend fun <Out, In> HttpClient.connect(
 ): Unit = handleConnection(connector.connect(
   HttpClientConnectionContext(this),
   request
-))
+).orThrow())
+
+// Which calls into...
+suspend fun <Out, In> HttpClient.connect(
+  connector: ClientConnector<Out, In>,
+  request: ConnectRequest,
+): ChannelConnection<Out, In>|ConnectError
 ```
 
 Then to provide the function call from the previous section `client.connect(WebSockets, "/messages")`, we provide a 
@@ -346,6 +357,73 @@ We can also apply similar functions to the connections produced by the connector
 | `withFormat<T>(BinaryFormat): ChannelConnection<T, T>` | Similar to the previous but for binary formats |
 | `asFlow(): Flow<I>` | Consumes input channel as a flow; opening up the `Flow` API |
 
+With regards to `asFlow()`: the lifetime of the connection should be bound to the flow, so that when it is consumed, the connection is closed.  Another matter is how sending messages during flow consumption should be facilitated.
+
+### Failures and Lifecycle Management
+[failures-and-lifecycle-management]: #failures-and-lifecycle-management
+
+One of the gaps in our current implementation of WebSockets is the lack of hooks for handling errors and changes in the connection states.  For this, we provide a connection state flow on every new connection instance, while also providing a general framework for handling errors while connecting or during the lifetime of the connection.
+
+#### Failure to Connect
+[failure-to-connect]: #failure-to-connect
+
+Ideally, all attempts to connect that end in failure should be incorporated into the function's signature.  For this, we can use rich errors:
+
+```kotlin
+typalias ConnectError = Rejected | NetworkError
+```
+
+Where `NetworkError` can encapsulate timeouts and disconnects and rejection can encapsulate all deliberate failures from the server.
+
+When using rich errors as part of the scoped a connect lambda, these will need to be thrown in the parent scope instead.  Alternatively, we could forgo the use of the scoped function for handling the connection lifecycle, however this would delegate the responsibility of closing the connection to the user.
+
+#### Connection Interruptions
+[connection-interruptions]: #connection-interruptions
+
+When using long-running connections, it's common for disruptions to occur.  To provide the best experience, it is our prerogative to expose the full catalogue of possible errors that might occur during the lifetime of a connection, so that they may be acted upon accordingly for reconnection or reporting.
+
+Based on our research of different protocols, we came up with this list:
+
+| Error | Recoverable | Description |
+|-------|-------------|--|
+| Closed | Sometimes | Peer has deliberately closed the connection |
+| Dropped | Yes| Peer disconnected without providing a reason|
+| Timeout | Yes| Connection remains open but no activity for pre-defined duration |
+| Violation | No| Bad data was sent over the wire |
+| GaveUp | No| Reconnection attempts are exhausted |
+
+Any of these could be thrown while trying to read a message from the channel.  Importantly, we need to communicate all these failures in a consistent way, as opposed to our current approach that oftentimes defers exception types to the underlying engine.
+
+One question remains whether an exception ought to be thrown when the remote end closes normally.  Since the lifetime of the connection is bound to the coroutine, then any event that would cancel the coroutine should throw an exception.  However, this becomes less ergonomic when using patterns where we read an unknown number of messages from the peer - for this reason I would argue for handling these situations within any DSL scopes without bubbling them up.  Closure events can also be handled within the state flow, which should be flushed prior to cancelling the coroutine.
+
+### Tracking Connection State
+[tracking-connection-state]: #tracking-connection-state
+
+The state of the underlying connection can change many times without affecting the interaction with the connection.  For this reason, we propose that every connection ought to have an event stream for changes in the connection state that can be used for instrumentation.
+
+So, on each `ChannelConnection`, we have a `StateFlow<ConnectionState>` where the `ConnectionState` is a sealed type of:
+
+```kotlin
+sealed interface ConnectionState {
+    data object Connecting : ConnectionState
+
+    data class Connected(val attributes: Attributes, val reconnects: Int) : ConnectionState
+
+    data class Reconnecting(
+        val attempt: Int,
+        val cause: Throwable?,
+        val nextDelay: Duration? = null,
+    ) : ConnectionState
+
+    data class Closing(val initiatedBy: CloseInitiator) : ConnectionState
+
+    data class Closed(val info: CloseInfo) : ConnectionState {
+        val cause: Throwable? get() = info.error
+    }
+}
+```
+
+
 # Drawbacks
 [drawbacks]: #drawbacks
 
@@ -376,14 +454,15 @@ We can also apply similar functions to the connections produced by the connector
   layers above restore their state through `onReconnect`.
 - **Testable.** `MessageConnection.pair()` and `ConnectionContext` let you test layers and reconnect logic with
   virtual time, without starting a server.
-- **Small surface.** Most user-facing API is extension functions on a few interfaces. Implementation types such as
-  `PipedConnection` stay internal.
+- **Small surface.** Most user-facing API is extension functions on a few interfaces.
 
 # Open Questions
 [open-questions]: #open-questions
 
 - **Synergy with existing APIs.** We have yet to look through the Ktor project to see if any other types would benefit from the new interfaces here.
 - **Lifecycle events.** We need to address how to handle all lifecycle events for different connection types within this API.
+-  **Sending from Flow.** We'll need to investigate our options for sending messages when consuming from a connection converted to a `Flow`.
+- **Connection closures.** What should the default behavior be when the peer closes a connection normally while you are waiting for a message or trying to send.
 
 # Future Directions
 [future-directions]: #future-directions
