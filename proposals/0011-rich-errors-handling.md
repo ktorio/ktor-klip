@@ -119,12 +119,17 @@ exceptionBoundary(dbFailures) { /* routes */ }
 ### 5. Handlers combine and nest
 
 ```kotlin
-errorBoundary(userErrors, adminErrors) { /* ... */ } // two contexts: UserError and AdminError errors both resolve
+// both handlers are in scope: a UserError goes to userErrors, an AdminError to adminErrors
+errorBoundary(userErrors, adminErrors) { /* ... */ }
+
+// nesting does the same; the inner boundary is searched first
 errorBoundary(userErrors) {
-    errorBoundary(adminErrors) { /* ... */ }         // nested: the same, the inner one is closer
+    errorBoundary(adminErrors) { /* ... */ }
 }
+
+// an error boundary inside an exception boundary
 exceptionBoundary(dbFailures) {
-    errorBoundary(userErrors) { /* ... */ }          // errors and exceptions: two nested scopes
+    errorBoundary(userErrors) { /* ... */ }
 }
 ```
 
@@ -222,9 +227,12 @@ It can't combine or nest:
 // combining two handlers, or nesting a boundary inside another, needs the union of two error type parameters
 public fun <E : Error, A : Error> ErrorBoundaryRoute<E>.errorBoundary(
     vararg handlers: ErrorHandler<A>,
-    build: ErrorBoundaryRoute<E | A>.() -> Unit, // compilation error in KEEP-0462
+    // doesn't compile: KEEP-0462 allows only one error type parameter in a union
+    build: ErrorBoundaryRoute<E | A>.() -> Unit,
 ): Route
-public operator fun <A : Error, B : Error> ErrorHandler<A>.plus(other: ErrorHandler<B>): ErrorHandler<A | B> // same
+
+// doesn't compile, for the same reason
+public operator fun <A : Error, B : Error> ErrorHandler<A>.plus(other: ErrorHandler<B>): ErrorHandler<A | B>
 ```
 
 ## Error handlers
@@ -232,7 +240,7 @@ public operator fun <A : Error, B : Error> ErrorHandler<A>.plus(other: ErrorHand
 ```kotlin
 public fun <E : Error> errorHandler(
     skipSentCalls: Boolean = true,
-    handle: suspend RoutingContext.(E) -> Unit, // becomes ErrorHandler.handle; the handler responds itself
+    handle: suspend RoutingContext.(E) -> Unit, // the body of ErrorHandler.handle
 ): ErrorHandler<E>
 
 // a route that responded, then sent an error
@@ -265,7 +273,7 @@ public fun <A : Error> Route.errorBoundary(
 ): Route
 
 public fun <A : Error, B : Error> Route.errorBoundary(
-    // no union: two separate contexts
+    // each handler becomes its own context parameter, so no union type is needed
     a: ErrorHandler<A>,
     b: ErrorHandler<B>,
     build: context(ErrorHandler<A>, ErrorHandler<B>) Route.() -> Unit,
@@ -300,8 +308,9 @@ Context resolution (KEEP-0367 §7.5) gives the rules:
 
 ```kotlin
 val dbFailures = exceptionHandler {
-    on<SQLTransientConnectionException> { e -> call.respond(HttpStatusCode.ServiceUnavailable) } // specific first
-    on<SQLException> { call.respond(HttpStatusCode.InternalServerError) }                       // then the hierarchy
+    // the specific type goes first, the general type after it
+    on<SQLTransientConnectionException> { e -> call.respond(HttpStatusCode.ServiceUnavailable) }
+    on<SQLException> { call.respond(HttpStatusCode.InternalServerError) }
 }
 
 // thrown after the response was sent (mid-stream): skipped by default
@@ -318,31 +327,34 @@ exceptionBoundary(dbFailures) {
 
 Exceptions are matched at runtime:
 
-- **Matching:** `on<T>` matches `T` and its subtypes, interfaces included.
-    - Fast path: a table lookup by the exception's exact class.
-    - Slow path: the handlers are checked one by one with `isInstance`, in declaration order. The first match wins, so
-      specific types go first, as with `catch` blocks.
-    - Both paths use only `KClass` equality and `isInstance`, so they behave the same on **every platform**.
+- **Matching:** `on<T>` matches `T` and its subtypes, interfaces included. The handlers are checked in declaration
+  order, and the first match wins, so specific types go first, as with `catch` blocks.
+- **Cached:** the result is remembered for each exception class, so the handlers are walked only the first time a
+  class is thrown.
+- **Every platform:** matching uses only `isInstance`, so it behaves the same everywhere.
 - **Unlisted exceptions** go to the outer `exceptionBoundary`, then `globalExceptionBoundary`, then a 500 with no
   message.
-- **Skipped because the call was already sent:** the outer boundaries are skipped too, and the exception is logged.
-- **Causes** aren't unwrapped.
+- **When a handler is skipped because the call was already sent,** the outer boundaries are skipped too, and the
+  exception is logged.
+- **Causes aren't unwrapped:** an exception is matched by its own class, never by its `cause`.
 
 ## Combining
 
 ```kotlin
-// errors: separate contexts, resolved at compile time (see Error boundaries)
+// errors: each handler is a separate context parameter, and the compiler picks one (see Error boundaries)
 errorBoundary(userErrors, adminErrors) { /* ... */ }
 
-// exceptions: several handlers in one boundary are joined in order; the same T in two handlers: the last wins
+// exceptions: the handlers of one boundary are joined in the order given.
+// The first match still wins, so a handler given earlier takes priority over a later one.
 exceptionBoundary(dbFailures, httpFailures) { /* ... */ }
 
-// to override another handler, nest: the inner boundary runs first
+// to override another handler, nest the boundaries: the inner one runs first
 exceptionBoundary(commonFailures) {
     exceptionBoundary(dbFailures) { /* ... */ }
 }
 
-// errors and exceptions: nest the two boundaries; a combined scope would need an overload for every mix of counts
+// errors and exceptions: nest the two boundaries.
+// One function for both would need an overload for every number of error handlers and exception handlers.
 exceptionBoundary(dbFailures) {
     errorBoundary(userErrors) { /* ... */ }
 }
@@ -357,7 +369,9 @@ handler written by the application. It works in every `RoutingContext` and needs
 public suspend fun RoutingContext.respondDefaultError(error: Error)
 
 // the module that declares an error registers its default response, usually when its plugin is installed
-public inline fun <reified E : Error> Application.defaultErrorResponse(noinline respond: suspend RoutingContext.(E) -> Unit)
+public inline fun <reified E : Error> Application.defaultErrorResponse(
+    noinline respond: suspend RoutingContext.(E) -> Unit,
+)
 
 application.defaultErrorResponse<ValidationFailed> { call.respond(HttpStatusCode.UnprocessableEntity) }
 ```
@@ -426,17 +440,14 @@ globalExceptionBoundary {
 
 ## Global boundary plumbing
 
-- `Application`'s `SupervisorJob` (Application.kt:133) gets a `CoroutineExceptionHandler` that dispatches to the
-  coroutine handlers.
-- `DefaultUncaughtExceptionHandler` is used by Netty (`:321`), CIO (`HttpServer.kt:54`), Jetty and servlet. It delegates
-  to the same handlers before its default logging.
+- The application's coroutine scope gets a `CoroutineExceptionHandler` that passes failures to the coroutine handlers.
+- The engines (Netty, CIO, Jetty and servlet) report their own coroutine failures to
+  `DefaultUncaughtExceptionHandler`. It calls the same handlers first and logs only what they didn't handle.
 - How the engines find the boundary is an implementation detail.
 
 ## Migration
 
-```kotlin
-install(StatusPages) { /* ... */ } // deprecate in 4.0
-```
+`StatusPages` is deprecated in 4.0 in favour of error and exception boundaries.
 
 # Drawbacks
 
@@ -468,8 +479,6 @@ install(StatusPages) { /* ... */ } // deprecate in 4.0
 
 - `respondDefaultError` for an unregistered error: a 500 and a log line, or a `Boolean` result?
 - Global boundary: `onCoroutineFailure<T>` or a `coroutines { }` scope?
-- Exception matching: a subtype match takes the first handler in declaration order, while the same `on<T>` in two
-  handlers of one boundary takes the last.
 - How many handlers should the `errorBoundary` overloads take?
 - Names: `respondError` (the handler may also only log), `respondDefaultError`, `defaultErrorResponse`.
 
@@ -483,7 +492,8 @@ install(StatusPages) { /* ... */ } // deprecate in 4.0
   install(RateLimit) { onRateLimited { e -> call.respond(HttpStatusCode.TooManyRequests, "Retry in ${e.retryAfter}") } }
 
   errorBoundary(apiErrors) {
-      rateLimit(RateLimitName("api"), onRateLimited = { respondError(it) }) { /* compiles only if ApiError covers RateLimited */ }
+      // compiles only if apiErrors accepts RateLimited
+      rateLimit(RateLimitName("api"), onRateLimited = { respondError(it) }) { /* ... */ }
   }
   ```
 - **Problem details:** RFC 9457 responses as a separate proposal. Ktor's default responses would use them when they
