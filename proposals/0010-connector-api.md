@@ -1,6 +1,6 @@
 |           |                                                 |
 |-----------|-------------------------------------------------|
-| Feature   | Message Protocol Abstraction                    |
+| Feature   | Connector API                    |
 | Submitted | 2026-11-06                                      |
 | Accepted  | No                                              |
 | Issue     | https://youtrack.jetbrains.com/issue/KTOR-10142/ |
@@ -153,7 +153,7 @@ In the base case, we roughly mimic the existing WebSockets API:
 ```kotlin
 val client = HttpClient()
 
-client.connect(WebSockets, "/messages") {
+client.connect("/messages", WebSockets).orThrow().use {
     for (message in incoming) {
         if (message !is Frame.Text) continue
         val number = message.readText().toInt()
@@ -172,7 +172,7 @@ But with the distinction that the connector, supplied as `WebSockets` above, wou
 This would allow for some simplifications on this basic example:
 
 ```kotlin
-client.connect("/messages", WebSockets.Text.mapIncoming(String::toInt)) {
+client.connect("/messages", WebSockets.Text.mapIncoming(String::toInt)).orThrow().use {
     for (number in incoming) {
         val response = buildString {
             if (number % 3 == 0) append("Fizz")
@@ -272,8 +272,8 @@ And these connection types lead us to the core extension on the `HttpClient`:
 ```kotlin
 // With connection scope...
 suspend fun <Out, In> HttpClient.connect(
-  connector: ClientConnector<Out, In>,
   request: ConnectRequest,
+  connector: ClientConnector<Out, In>,
   handleConnection: suspend ChannelConnection<Out, In>.() -> Unit,
 ): Unit = handleConnection(connector.connect(
   HttpClientConnectionContext(this),
