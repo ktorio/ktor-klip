@@ -162,7 +162,7 @@ When `tryConsume` cannot consume enough tokens for a request, it returns `State.
 
 ### Server Example
 
-In the following code snippet the plugin lets each IP address make up to 5 login attempts at once, replenishing one attempt every 30 seconds:
+In the following code snippet, the plugin lets each IP address make up to 5 login attempts at once, replenishing one attempt every 30 seconds:
 
 ```kotlin
 install(RateLimit) {
@@ -204,7 +204,7 @@ Server rate limiters currently use a `() -> Long` lambda, which returns `getTime
 
 Propose to use `TimeSource.WithComparableMarks` to measure elapsed time for refills and `Clock` to supply timestamps for response headers. By default, these are `TimeSource.Monotonic` and `Clock.System`.
 
-Both `RateLimiter.default()` and `RateLimiter.incrementalRefill()` allow users to optionally supply a `timeSource` and a `clock` arguments. The provider functions offer the same options on the client and server.
+Both `RateLimiter.default()` and `RateLimiter.incrementalRefill()` allow users to optionally supply `timeSource` and `clock` arguments. The provider functions offer the same options on the client and server.
 
 Tests can use `TestTimeSource` to advance refill time without waiting. This is an updated version of the existing `testNestedRateLimitsWithSameNameAndTimeSource` server test:
 
@@ -268,7 +268,7 @@ routing {
 
 Both routes use the same user ID as the key. The quota route is outside `rateLimit(reports)`, so checking the quota spends no tokens and still works after the user reaches the limit.
 
-To read the user's quota, we need the same rate limiter object that limits their other requests. If the rate limiter doesn't exist yet, we need to create it. However, the current factory takes an `ApplicationCall` and we cannot reliably use the `ApplicationCall` from a quota request to identify the rate limiter for the other endpoints, since those call objects may differ. We therefore propose `rateLimiterFactory { key -> ... }` to create limiters from the request key alone. The key must contain all the data needed to create the limiter, so `Application.getRateLimiter(providerName, key): RateLimiter` can create it if needed and the plugin can reuse it for requests with the same provider name and key. We would deprecate the old `rateLimiter { call, key -> ... }` overload and keep it as a fallback when handling requests subject to limit.
+To read the user's quota, we need the same rate limiter object that limits their other requests. If the rate limiter doesn't exist yet, we need to create it. However, the current factory takes an `ApplicationCall`, and we cannot reliably use the `ApplicationCall` from a quota request to identify the rate limiter for the other endpoints, since those call objects may differ. We therefore propose `rateLimiterFactory { key -> ... }` to create limiters from the request key alone. The key must contain all the data needed to create the limiter, so `Application.getRateLimiter(providerName, key): RateLimiter` can create it if needed and the plugin can reuse it for requests with the same provider name and key. We would deprecate the old `rateLimiter { call, key -> ... }` overload and keep it as a fallback when handling requests subject to limit.
 
 The `getRateLimiter()` method throws `IllegalStateException` if the limiter doesn't exist yet and the provider uses only the deprecated factory. To let `getRateLimiter()` create a missing limiter, Ktor users need to migrate to the shared `RateLimiter` interface and use `rateLimiterFactory`, which accepts only the request key parameter.
 
@@ -379,7 +379,7 @@ Prometheus regularly scrapes the server's `/metrics` endpoint. Grafana can use t
 
 Both meters have tags to store provider name, route path, and HTTP method. The global limiter intercepts before routing, so its `route` tag is `n/a`. The request counter also has a `result` tag with the value `allowed` or `rejected`.
 
-`RateLimitMetrics` requires an event monitor dependency to be built, and an optional configuration lambda with a `RateLimitMetricsConfig` receiver.
+`RateLimitMetrics` takes an event monitor and an optional configuration lambda with a `RateLimitMetricsConfig` receiver.
 
 ```kotlin
 public class RateLimitMetrics(
@@ -469,7 +469,7 @@ public class RateLimitProviderConfig(name: RateLimitName) {
 }
 ```
 
-The global provider applies to every outgoing request attempt. Calling `rateLimit(name)` in a request, selects a registered provider by name so the request must also pass that provider's limit. Calling `rateLimit()` without arguments selects the provider registered without a name. A request can select several providers, and the selection carries over to retries and redirects.
+The global provider applies to every outgoing request attempt. Calling `rateLimit(name)` in a request selects a registered provider by name,  so the request must also pass that provider's limit. Calling `rateLimit()` without arguments selects the provider registered without a name. A request can select several providers, and the selection carries over to retries and redirects.
 
 The plugin tries to consume tokens from the global provider first, then from each selected provider in the order they were selected. For each provider, the request key identifies the limiter and the request weight determines how many tokens to consume. The client sends the request only after all applicable limiters allow it. If a later limiter rejects the request, tokens consumed by earlier limiters stay spent.
 
@@ -518,7 +518,7 @@ With a `maxWaitTime` of 0 or negative, the request fails before joining the queu
 
 If a queued request is canceled, the plugin removes it from the queue. If it was at the front of the queue, the next request will try to consume tokens. Closing the client cancels all queued requests and their callers get `CancellationException`.
 
-The `rateLimit(name)` configuration block can override `maxWaitTime` for a provider on that request, including its retries and redirects. A `null` value for `maxWaitTime` will reset all request overrides. The same configuration block works with `rateLimit(RateLimitName.global)` to override the wait time of a configured global provider.
+The `rateLimit(name)` configuration block can override `maxWaitTime` for a provider on that request, including its retries and redirects. A `null` value for `maxWaitTime` will reset all request overrides for that provider. The same configuration block works with `rateLimit(RateLimitName.global)` to override the wait time of a configured global provider.
 
 ```kotlin
 @KtorDsl
@@ -532,7 +532,7 @@ public fun HttpRequestBuilder.rateLimit(
 )
 ```
 
-In the following example the wait time is set to 0, so the status request fails immediately if the rate limiter doesn't have enough tokens.
+In the following example, the wait time is set to 0, so the status request fails immediately if the rate limiter doesn't have enough tokens.
 
 ```kotlin
 val status = RateLimitName("status")
